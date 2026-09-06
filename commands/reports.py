@@ -6,7 +6,6 @@ from discord.ext import commands
 from discord import ui
 from state import bot
 from helpers.core import *
-from helpers.core import make_embed  # noqa: F401 (متاح للتوافق)
 from views.paginators import WorksPaginator, get_works_info
 from tasks.lifecycle import specialty_autocomplete
 from ui import cards
@@ -25,7 +24,8 @@ def _member_avatar(member):
 
 
 def _medal(rank: int) -> str:
-    return "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else "🏅" if rank <= 10 else "▫️"
+    """التاج للمركز الأول فقط — بلا ميداليات ملونة."""
+    return cards.rank_prefix(rank)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -63,7 +63,7 @@ class BackNav:
 # ═══════════════════════════════════════════════════════════════
 class WorkSummarySelectView(ui.LayoutView):
     def __init__(self, works, bonuses, deductions, member, user_id,
-                 currency, title_prefix="📊 ملخص شغل"):
+                 currency, title_prefix="ملخص شغل"):
         super().__init__(timeout=600.0)
         self.works = works
         self.bonuses = bonuses
@@ -94,21 +94,23 @@ class WorkSummarySelectView(ui.LayoutView):
         net = gross + total_bonus - total_deduct
         total_works = len(self.works)
         total_chapters = sum(len(entries) for entries in self.works.values())
+        # كل رقم في سطر مستقل — قراءة مريحة بلا حشو
         lines = [
-            "### 📈 الحصيلة الكلية",
-            f"**📁 الأعمال:** {total_works} • **📑 الفصول:** {total_chapters}",
+            "### الحصيلة الكلية",
+            f"**الأعمال:** {total_works}",
+            f"**الفصول:** {total_chapters}",
             f"**💰 قيمة الأعمال:** {self.currency}{gross:,.2f}",
         ]
         if total_bonus:
-            lines.append(f"**🎁 المكافآت:** {self.currency}{total_bonus:,.2f}")
+            lines.append(f"**المكافآت:** {self.currency}{total_bonus:,.2f}")
         if total_deduct:
-            lines.append(f"**🔻 الخصومات:** {self.currency}{total_deduct:,.2f}")
-        lines.append(f"**💵 الصافي النهائي:** {self.currency}{net:,.2f}")
+            lines.append(f"**الخصومات:** {self.currency}{total_deduct:,.2f}")
+        lines.append(f"**💰 الصافي النهائي:** {self.currency}{net:,.2f}")
         return lines
 
     def _summary_children(self, avatar):
         children: list = [
-            cards.header([f"## {self.title_prefix} {self.member.display_name}",
+            cards.header([f"## {self.title_prefix}",
                           f"{self.member.mention}"], avatar),
             cards.sep(2),
             cards.text("\n".join(self._summary_stats_lines())),
@@ -123,7 +125,7 @@ class WorkSummarySelectView(ui.LayoutView):
             total = sum(e.get("total", 0) for e in entries)
             options.append(discord.SelectOption(
                 label=cards.clamp(work_name, 100), value=work_name,
-                description=cards.clamp(f"📑 {chapters} فصول • 💵 {self.currency}{total:,.2f}", 100), emoji="📖"))
+                description=cards.clamp(f"{chapters} فصول • {self.currency}{total:,.2f}", 100), emoji="📖"))
         if self.bonuses or self.deductions:
             options.append(discord.SelectOption(label="المكافآت والخصومات", value="__bonuses__",
                                                 description="تفاصيل المكافآت والخصومات", emoji="⚖️"))
@@ -131,7 +133,8 @@ class WorkSummarySelectView(ui.LayoutView):
             options.append(discord.SelectOption(label="عرض كل الفصول", value="__all__",
                                                 description="جميع الفصول مجمعة", emoji="📚"))
         if options:
-            children += [cards.sep(), cards.text("-# اختر عملاً من القائمة لعرض تفاصيله الدقيقة."),
+            children += [cards.sep(),
+                         cards.text("-# اختر عملاً من القائمة لعرض تفاصيله الدقيقة."),
                          cards.make_select("اختر عملاً لعرض التفاصيل...", options, self.select_callback)]
         return children
 
@@ -151,24 +154,26 @@ class WorkSummarySelectView(ui.LayoutView):
 
         ch_lines = []
         for e in entries:
-            note = f"\n  -# 📝 {e.get('notes')}" if e.get("notes") else ""
+            note = f"\n  -# {e.get('notes')}" if e.get("notes") else ""
             ch_lines.append(f"• **فصل {e.get('chapter', '؟')}** — {e.get('work_type', 'غير محدد')} — {self.currency}{e.get('total', 0):.2f}{note}")
         shown = "\n".join(ch_lines[:12])
         if len(ch_lines) > 12:
             shown += f"\n-# … و{len(ch_lines) - 12} فصلًا إضافيًا"
 
         body = "\n".join([
-            "### 📊 الملخص",
-            f"**📑 الفصول:** {count} • **💵 المجموع:** {self.currency}{total:,.2f} • **💰 متوسط الفصل:** {self.currency}{avg:,.2f}",
+            "### الملخص",
+            f"**الفصول:** {count}",
+            f"**💰 المجموع:** {self.currency}{total:,.2f}",
+            f"**متوسط الفصل:** {self.currency}{avg:,.2f}",
             "",
-            "### 🛠️ التوزيع على التخصصات",
+            "### التوزيع على التخصصات",
             *type_lines,
             "",
-            "### 📑 الفصول (مرتبة رقميًا)",
+            "### الفصول (مرتبة رقميًا)",
             shown,
         ])
         children: list = [
-            cards.header([f"## 📖 {cards.clamp(work_name, 60)}",
+            cards.header([f"## {cards.clamp(work_name, 60)}",
                           f"{self.member.mention}"], avatar),
             cards.sep(2),
             cards.text(cards.clamp(body, 3600)),
@@ -179,7 +184,7 @@ class WorkSummarySelectView(ui.LayoutView):
 
     def _all_children(self, avatar):
         children: list = [
-            cards.header([f"## 📚 جميع الفصول — {self.member.display_name}",
+            cards.header(["## جميع الفصول",
                           f"{self.member.mention}"], avatar),
             cards.sep(2),
         ]
@@ -191,14 +196,14 @@ class WorkSummarySelectView(ui.LayoutView):
                        for e in sort_entries_by_chapter(entries)[:4]]
             if len(entries) > 4:
                 preview.append("  -# … والمزيد")
-            chunks.append(f"**📖 {work_name}** ({cnt} فصل — {self.currency}{total:,.2f})\n" + "\n".join(preview))
+            chunks.append(f"**{work_name}** ({cnt} فصل — {self.currency}{total:,.2f})\n" + "\n".join(preview))
         children.append(cards.text(cards.clamp("\n\n".join(chunks), 3400)))
         children += [cards.sep(), self._back_row()]
         return children
 
     def _bonuses_children(self, avatar):
         children: list = [
-            cards.header(["## ⚖️ المكافآت والخصومات",
+            cards.header(["## المكافآت والخصومات",
                           f"{self.member.mention}"], avatar),
             cards.sep(2),
         ]
@@ -206,9 +211,9 @@ class WorkSummarySelectView(ui.LayoutView):
                      for e in self.bonuses] or ["• لا يوجد"]
         ded_lines = [f"• فصل {e.get('chapter','خصم')}: **{self.currency}{abs(e.get('total',0)):,.2f}** — {e.get('notes','')}"
                      for e in self.deductions] or ["• لا يوجد"]
-        children.append(cards.text("**🎁 المكافآت**\n" + "\n".join(bon_lines)))
+        children.append(cards.text("**المكافآت**\n" + "\n".join(bon_lines)))
         children.append(cards.sep())
-        children.append(cards.text("**🔻 الخصومات**\n" + "\n".join(ded_lines)))
+        children.append(cards.text("**الخصومات**\n" + "\n".join(ded_lines)))
         children += [cards.sep(), self._back_row()]
         return children
 
@@ -326,10 +331,10 @@ class TopView(BackNav, ui.LayoutView):
             title = f"أبطال تخصص **{str(self.current_type).replace('_', ' ').title()}**"
         elif self.sort_by == "chapters":
             sorted_list = sorted(members_stats, key=lambda x: x[1].get("total_entries", 0), reverse=True)
-            title = "الترتيب حسب **عدد الفصول** 📑"
+            title = "الترتيب حسب **عدد الفصول**"
         else:
             sorted_list = sorted(members_stats, key=lambda x: x[1].get("total_amount", 0), reverse=True)
-            title = "الترتيب حسب **إجمالي المبلغ** 💰"
+            title = "الترتيب حسب **إجمالي المبلغ**"
 
         lines = []
         for i, (uid, stats) in enumerate(sorted_list[:10], 1):
@@ -337,21 +342,10 @@ class TopView(BackNav, ui.LayoutView):
             if member:
                 display = member.mention
             else:
-                fallback_name = None
-                for e in records.get(str(uid), []):
-                    if e.get("username"):
-                        fallback_name = e["username"]
-                        break
-                if not fallback_name:
-                    try:
-                        user = await bot.fetch_user(int(uid))
-                        fallback_name = user.display_name
-                    except Exception:
-                        fallback_name = f"مستخدم {uid}"
-                display = f"**{fallback_name}** (غادر)"
+                display = f"<@{uid}> (غادر)"
             lines.append(
-                f"{_medal(i)} **{i}.** {display}\n"
-                f"-# 💰 {self.currency}{stats.get('total_amount', 0):,.2f} • 📑 {stats.get('total_entries', 0)} فصل"
+                f"{cards.rank_prefix(i)} {display}\n"
+                f"-# 💰 {self.currency}{stats.get('total_amount', 0):,.2f} • {stats.get('total_entries', 0)} فصل"
             )
         if not lines:
             lines = ["*لا توجد بيانات كافية في هذا التصنيف بعد.*"]
@@ -362,7 +356,7 @@ class TopView(BackNav, ui.LayoutView):
         if self.sort_by == "by_type" and self.current_type is None:
             subtitle = "اختر التخصص ثم معيار الترتيب."
             children: list = [
-                cards.header(["## 🏆 ترتيب الأعضاء", subtitle], avatar),
+                cards.header(["## ترتيب الأعضاء", subtitle], avatar),
                 cards.sep(2),
             ]
             type_counts = self.stat_doc.get("type_counts", {})
@@ -377,7 +371,7 @@ class TopView(BackNav, ui.LayoutView):
         else:
             title, lines = await self._ranking_lines()
             children: list = [
-                cards.header(["## 🏆 ترتيب الأعضاء", title], avatar),
+                cards.header(["## ترتيب الأعضاء", title], avatar),
                 cards.sep(2),
                 cards.text("\n".join(lines)),
             ]
@@ -441,14 +435,17 @@ class MemberDetailView(BackNav, ui.LayoutView):
         deductions = sum(abs(e.get("total", 0)) for e in self.entries if e.get("work_type") == "خصم")
         work_entries = [e for e in self.entries if e.get("work_type") not in ("مكافأة", "خصم")]
 
-        # 1) الإجماليات
-        scope = "في التخصص المحدد" if self.focus_specialty else "منذ البداية"
+        # 1) الإجماليات — كل رقم في سطر مستقل
+        scope = " — في التخصص المحدد" if self.focus_specialty else ""
         totals = "\n".join([
-            "### 📊 الإجماليات " + f"({scope})" if self.focus_specialty else "### 📊 الإجماليات",
-            f"**📑 الفصول:** {r['chapters']} • **📚 الأعمال:** {r['works_count']} • **🧾 السجلات:** {len(self.entries)}",
-            f"**💰 قيمة الأعمال:** {cur}{r['total_works']:,.2f}",
-            f"**🎁 المكافآت:** {cur}{bonuses:,.2f} • **🔻 الخصومات:** {cur}{deductions:,.2f}",
-            f"**💵 الصافي النهائي:** {cur}{r['net_total']:,.2f}",
+            "### الإجماليات" + scope,
+            f"**الفصول:** {r['chapters']}",
+            f"**الأعمال:** {r['works_count']}",
+            f"**السجلات:** {len(self.entries)}",
+            f"**قيمة الأعمال:** {cur}{r['total_works']:,.2f}",
+            f"**المكافآت:** {cur}{bonuses:,.2f}",
+            f"**الخصومات:** {cur}{deductions:,.2f}",
+            f"**💰 الصافي النهائي:** {cur}{r['net_total']:,.2f}",
         ])
 
         blocks = [totals]
@@ -463,7 +460,7 @@ class MemberDetailView(BackNav, ui.LayoutView):
             max_c = max(s["c"] for s in works_stats.values())
             lines = [f"• **{w}** — {cards.progress_bar(s['c'], max_c)} **{s['c']}** فصول — {cur}{s['t']:,.2f}"
                      for w, s in sorted(works_stats.items(), key=lambda kv: -kv[1]["c"])]
-            blocks.append("### 📚 تفصيل الأعمال\n" + "\n".join(lines))
+            blocks.append("### تفصيل الأعمال\n" + "\n".join(lines))
 
         # 3) تفصيل التخصصات
         types_stats = defaultdict(lambda: {"c": 0, "t": 0.0})
@@ -475,7 +472,7 @@ class MemberDetailView(BackNav, ui.LayoutView):
             max_c = max(s["c"] for s in types_stats.values())
             lines = [f"• **{t.replace('_', ' ').title()}** — {cards.progress_bar(s['c'], max_c)} **{s['c']}** فصول — {cur}{s['t']:,.2f}"
                      for t, s in sorted(types_stats.items(), key=lambda kv: -kv[1]["c"])]
-            blocks.append("### 🛠️ تفصيل التخصصات\n" + "\n".join(lines))
+            blocks.append("### تفصيل التخصصات\n" + "\n".join(lines))
 
         # 4) آخر السجلات (الأحدث أولًا)
         recent = sorted([e for e in self.entries if entry_datetime(e)],
@@ -488,7 +485,7 @@ class MemberDetailView(BackNav, ui.LayoutView):
                 lines.append(f"• **فصل {e.get('chapter', '؟')}** — {e.get('work_name', '؟')} — "
                              f"{e.get('work_type', '؟')} — {cur}{e.get('total', 0):.2f}"
                              + (f"\n  -# {stamp}" if stamp else ""))
-            blocks.append("### 🕒 آخر السجلات\n" + "\n".join(lines))
+            blocks.append("### آخر السجلات\n" + "\n".join(lines))
 
         return "\n\n".join(blocks)
 
@@ -497,7 +494,7 @@ class MemberDetailView(BackNav, ui.LayoutView):
         member = self.guild.get_member(int(self.row["user_id"])) if self.guild else None
         avatar = _member_avatar(member)
         who = member.mention if member else self.row["mention"]
-        title = ("🛠️ تفاصيل العضو في التخصص" if self.focus_specialty else "👤 تفاصيل العضو")
+        title = ("تفاصيل العضو في التخصص" if self.focus_specialty else "تفاصيل العضو")
         subtitle = (f"{who} — تخصص **{self.focus_specialty.replace('_', ' ').title()}**"
                     if self.focus_specialty else who)
         children: list = [
@@ -516,7 +513,7 @@ class MemberDetailView(BackNav, ui.LayoutView):
 #   من القائمة المنسدلة يفتح تفاصيله الدقيقة.
 # ═══════════════════════════════════════════════════════════════
 class MembersHubView(BackNav, ui.LayoutView):
-    def __init__(self, rows, guild, currency, title="👥 الأعضاء والمستحقات",
+    def __init__(self, rows, guild, currency, title="الأعضاء والمستحقات",
                  back=None, per_page=8, focus_specialty=None):
         super().__init__(timeout=600.0)
         self.rows = rows
@@ -533,16 +530,17 @@ class MembersHubView(BackNav, ui.LayoutView):
     def accent(self):
         return cards.ACCENT_GOLD
 
-    def _summary_line(self) -> str:
+    def _summary_text(self) -> str:
         total_net = sum(r["net_total"] for r in self.rows)
         total_ch = sum(r["chapters"] for r in self.rows)
-        return f"**{len(self.rows)}** عضو • 📑 **{total_ch}** فصول • 💵 **{self.currency}{total_net:,.2f}**"
+        return (f"**الأعضاء:** {len(self.rows)}\n"
+                f"**الفصول المحتسبة:** {total_ch}\n"
+                f"**💰 الصافي الإجمالي:** {self.currency}{total_net:,.2f}")
 
     def _member_line(self, i, row) -> str:
-        member = self.guild.get_member(int(row["user_id"])) if self.guild else None
-        who = member.mention if member else f"**{row['display']}**"
-        return (f"{_medal(i)} **{i}.** {who}\n"
-                f"-# 📑 {row['chapters']} فصول • 📚 {row['works_count']} أعمال • 💵 **{self.currency}{row['net_total']:,.2f}**")
+        who = f"<@{row['user_id']}>"
+        return (f"{cards.rank_prefix(i)} {who}\n"
+                f"-# {row['chapters']} فصل • {row['works_count']} أعمال • 💰 {self.currency}{row['net_total']:,.2f}")
 
     def _options(self):
         start = self.page * self.per_page
@@ -550,12 +548,12 @@ class MembersHubView(BackNav, ui.LayoutView):
         options = []
         for row in page_rows:
             member = self.guild.get_member(int(row["user_id"])) if self.guild else None
-            name = member.display_name if member else row["display"].lstrip('@')
+            name = member.display_name if member else row["display"]
             options.append(discord.SelectOption(
                 label=cards.clamp(name, 100),
                 value=row["user_id"],
                 description=cards.clamp(
-                    f"📑 {row['chapters']} فصول • 💵 {self.currency}{row['net_total']:,.2f}", 100),
+                    f"{row['chapters']} فصول • {self.currency}{row['net_total']:,.2f}", 100),
                 emoji="👤",
             ))
         return options
@@ -563,8 +561,11 @@ class MembersHubView(BackNav, ui.LayoutView):
     def rebuild(self):
         self.clear_items()
         children: list = [
-            cards.header([f"## {self.title}", self._summary_line()], _bot_avatar()),
+            cards.header([f"## {self.title}",
+                          "اختر عضواً من القائمة لعرض تفاصيله الدقيقة."], _bot_avatar()),
             cards.sep(2),
+            cards.text(self._summary_text()),
+            cards.sep(),
         ]
         start = self.page * self.per_page
         page_rows = self.rows[start:start + self.per_page]
@@ -573,7 +574,7 @@ class MembersHubView(BackNav, ui.LayoutView):
             children.append(cards.text("\n".join(blocks)))
             children.append(cards.sep())
             children.append(cards.make_select(
-                "🔍 اختر عضواً لعرض تفاصيله الدقيقة...", self._options(), self._member_selected))
+                "اختر عضواً لعرض تفاصيله الدقيقة...", self._options(), self._member_selected))
         else:
             children.append(cards.text("*لا يوجد أعضاء لعرضهم.*"))
         if self.total_pages > 1:
@@ -612,20 +613,20 @@ class SpecialtyMembersView(MembersHubView):
     def __init__(self, rows, guild, currency, specialty, back=None):
         self.specialty = specialty
         super().__init__(rows, guild, currency,
-                         title=f"🛠️ أعضاء تخصص: {specialty.replace('_', ' ').title()}",
+                         title=f"أعضاء تخصص: {specialty.replace('_', ' ').title()}",
                          back=back, per_page=8, focus_specialty=specialty)
 
-    def _summary_line(self) -> str:
+    def _summary_text(self) -> str:
         total_net = sum(r["net_total"] for r in self.rows)
         total_ch = sum(r["chapters"] for r in self.rows)
-        return (f"**{len(self.rows)}** عضو • 📑 **{total_ch}** فصول في التخصص • "
-                f"💵 **{self.currency}{total_net:,.2f}**")
+        return (f"**الأعضاء:** {len(self.rows)}\n"
+                f"**الفصول في التخصص:** {total_ch}\n"
+                f"**💰 الصافي الإجمالي:** {self.currency}{total_net:,.2f}")
 
     def _member_line(self, i, row) -> str:
-        member = self.guild.get_member(int(row["user_id"])) if self.guild else None
-        who = member.mention if member else f"**{row['display']}**"
-        return (f"{_medal(i)} **{i}.** {who}\n"
-                f"-# 📑 {row['chapters']} فصول في التخصص • 💵 **{self.currency}{row['net_total']:,.2f}**")
+        who = f"<@{row['user_id']}>"
+        return (f"{cards.rank_prefix(i)} {who}\n"
+                f"-# {row['chapters']} فصل في التخصص • 💰 {self.currency}{row['net_total']:,.2f}")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -657,23 +658,22 @@ class StatsView(ui.LayoutView):
         await interaction.response.edit_message(view=self)
 
     def _tabs_row(self):
-        active_style = discord.ButtonStyle.success
-        idle_style = discord.ButtonStyle.secondary
+        # كل الأزرار رمادية — الزر النشط يظهر معطلاً (مُظللاً) ليعرف المستخدم مكانه
         return cards.row(
-            cards.make_button("🏠 الرئيسية", style=active_style if self.current_page == "overview" else idle_style,
-                              callback=self._overview_callback),
-            cards.make_button("📊 التخصصات", style=active_style if self.current_page == "types" else idle_style,
-                              callback=self._types_callback),
-            cards.make_button("⏳ زمني", style=active_style if self.current_page == "time" else idle_style,
-                              callback=self._time_callback),
-            cards.make_button("🏆 الأفضل", style=active_style if self.current_page == "top" else idle_style,
+            cards.make_button("الرئيسية", style=discord.ButtonStyle.secondary,
+                              callback=self._overview_callback, disabled=self.current_page == "overview"),
+            cards.make_button("التخصصات", style=discord.ButtonStyle.secondary,
+                              callback=self._types_callback, disabled=self.current_page == "types"),
+            cards.make_button("زمني", style=discord.ButtonStyle.secondary,
+                              callback=self._time_callback, disabled=self.current_page == "time"),
+            cards.make_button("الأفضل", style=discord.ButtonStyle.secondary,
                               callback=self._enter_top_mode),
         )
 
     def _build_children(self) -> list:
         avatar = _member_avatar(self.bot_member)
         children: list = [
-            cards.header(["## 📊 لوحة الإحصائيات", "مؤشرات الفريق الحية المحدثة تلقائيًا."], avatar),
+            cards.header(["## لوحة الإحصائيات", "مؤشرات الفريق الحية المحدثة تلقائيًا."], avatar),
             cards.sep(2),
         ]
         children += self._page_children()
@@ -709,9 +709,9 @@ class StatsView(ui.LayoutView):
         active = len(get_top_members_dict(self.stat_doc))
         return [
             cards.text(
-                f"**📄 إجمالي الفصول:** {total_entries}\n"
+                f"**الفصول:** {total_entries}\n"
                 f"**💰 إجمالي المبالغ:** {self.currency}{total_amount:,.2f}\n"
-                f"**👥 الأعضاء النشطون:** {active}"
+                f"**الأعضاء النشطون:** {active}"
             ),
         ]
 
@@ -735,10 +735,10 @@ class StatsView(ui.LayoutView):
         total_amount = self.stat_doc.get("total_amount", 0)
         return [
             cards.text(
-                f"**📅 اليوم** — 📑 {daily['entries']} فصل • 💰 {self.currency}{daily['amount']:,.2f}\n"
-                f"**📆 الأسبوع** — 📑 {weekly['entries']} فصل • 💰 {self.currency}{weekly['amount']:,.2f}\n"
-                f"**🗓️ الشهر** — 📑 {monthly['entries']} فصل • 💰 {self.currency}{monthly['amount']:,.2f}\n"
-                f"**🌐 الإجمالي الكلي** — 📑 {total_entries} فصل • 💰 {self.currency}{total_amount:,.2f}"
+                f"**اليوم** — {daily['entries']} فصل • 💰 {self.currency}{daily['amount']:,.2f}\n"
+                f"**الأسبوع** — {weekly['entries']} فصل • 💰 {self.currency}{weekly['amount']:,.2f}\n"
+                f"**الشهر** — {monthly['entries']} فصل • 💰 {self.currency}{monthly['amount']:,.2f}\n"
+                f"**الإجمالي الكلي** — {total_entries} فصل • 💰 {self.currency}{total_amount:,.2f}"
             ),
             cards.sep(),
             cards.text("-# إحصائيات تراكمية لنفس اليوم / الأسبوع / الشهر."),
@@ -779,12 +779,12 @@ class SpecialtyPickView(BackNav, ui.LayoutView):
             for s in sorted(PRICES.keys())
         ]
         children: list = [
-            cards.header(["## 🛠️ أعضاء تخصص",
+            cards.header(["## أعضاء تخصص",
                           "اختر التخصص لعرض أعضائه ومستحقاتهم فيه مرتبين حسب الفصول."], _bot_avatar()),
             cards.sep(2),
         ]
         if options:
-            children.append(cards.text(f"**🛠️ التخصصات المعتمدة حاليًا:** {len(options)}"))
+            children.append(cards.text(f"**التخصصات المعتمدة حاليًا:** {len(options)}"))
             children.append(cards.sep())
             children.append(cards.make_select("اختر التخصص...", options, self._picked))
         else:
@@ -806,7 +806,7 @@ class SpecialtyPickView(BackNav, ui.LayoutView):
                     filtered[uid] = matched
             if not filtered:
                 await interaction.message.edit(view=cards.info_card(
-                    "📭 لا يوجد أعضاء", [f"لا يوجد أعضاء مسجلون في تخصص `{specialty}`."],
+                    "لا يوجد أعضاء", [f"لا يوجد أعضاء مسجلون في تخصص `{specialty}`."],
                     avatar_url=_bot_avatar()))
                 return
             rows = _build_member_finance_rows(filtered, self.guild)
@@ -816,7 +816,7 @@ class SpecialtyPickView(BackNav, ui.LayoutView):
             await interaction.message.edit(view=view)
         except Exception as e:
             await interaction.message.edit(view=cards.error_card(
-                "❌ تعذر فتح القسم", [f"`{str(e)[:200]}`"], avatar_url=_bot_avatar()))
+                "تعذر فتح القسم", [f"`{str(e)[:200]}`"], avatar_url=_bot_avatar()))
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -853,7 +853,7 @@ class DashboardView(ui.LayoutView):
             except Exception as e:
                 try:
                     await interaction.message.edit(view=cards.error_card(
-                        "❌ تعذر فتح القسم", [f"حدث خطأ:\n`{str(e)[:200]}`"], avatar_url=_bot_avatar()))
+                        "تعذر فتح القسم", [f"حدث خطأ:\n`{str(e)[:200]}`"], avatar_url=_bot_avatar()))
                 except Exception:
                     pass
         return callback
@@ -862,11 +862,11 @@ class DashboardView(ui.LayoutView):
         records = await load_visible_records()
         rows = _build_member_finance_rows(records, self.guild)
         if not rows:
-            return cards.info_card("📭 لا يوجد أعضاء",
+            return cards.info_card("لا يوجد أعضاء",
                                    ["لا توجد سجلات أعضاء بعد — يبدأ العد بأول /تسجيل."],
                                    avatar_url=_bot_avatar())
         return MembersHubView(rows, self.guild, SETTINGS.get('currency', '$'),
-                              title="👥 الأعضاء والمستحقات", back=self._as_back)
+                              title="الأعضاء والمستحقات", back=self._as_back)
 
     async def _open_top(self):
         stat_doc = await stats_collection.find_one({"_id": "stats"}) or {}
@@ -875,7 +875,7 @@ class DashboardView(ui.LayoutView):
     async def _open_stats(self):
         stat_doc = await stats_collection.find_one({"_id": "stats"})
         if not stat_doc:
-            return cards.info_card("📭 لا توجد إحصائيات",
+            return cards.info_card("لا توجد إحصائيات",
                                    ["لا توجد إحصائيات بعد."], avatar_url=_bot_avatar())
         return StatsView(stat_doc, self.guild.me, SETTINGS.get('currency', '$'),
                          self.guild, back=self._as_back)
@@ -883,7 +883,7 @@ class DashboardView(ui.LayoutView):
     async def _open_payment(self):
         rows, details = await build_payment_rows(self.guild)
         if not rows:
-            return cards.info_card("📭 لا توجد سجلات",
+            return cards.info_card("لا توجد سجلات",
                                    ["لا توجد أي سجلات لهذا الشهر."], avatar_url=_bot_avatar())
         return PaymentReportPaginator(rows, details, self.guild,
                                       SETTINGS.get('currency', '$'), back=self._as_back)
@@ -899,11 +899,23 @@ class DashboardView(ui.LayoutView):
         month_entries = [e for e in entries
                          if (dt := entry_datetime(e)) is not None and dt >= month_start]
         if not month_entries:
-            return cards.info_card("📭 لا يوجد عمل هذا الشهر",
-                                   [f"لا يوجد عمل مسجل لك <@{self.user.id}> منذ بداية الشهر."],
-                                   avatar_url=_bot_avatar())
+            async def _back(interaction: discord.Interaction):
+                parent = await self._as_back()
+                await interaction.response.edit_message(view=parent)
+            children = [
+                cards.header(["## الملخص الشهري", f"<@{self.user.id}>"], _bot_avatar()),
+                cards.sep(2),
+                cards.text("لا يوجد عمل مسجل لك منذ بداية الشهر."),
+                cards.sep(),
+                cards.row(cards.secondary_btn("عودة إلى لوحة التحكم", _back, emoji="↩")),
+                cards.sep(),
+                cards.text(f"-# {cards.BOT_SIGNATURE}"),
+            ]
+            return cards.Card(cards.ACCENT_GOLD, *children)
+        # نفس البطاقة المستخدمة في /ملخص_شهري + زر رجوع إلى اللوحة
         return build_monthly_summary_card(self.user, month_entries,
-                                          SETTINGS.get('currency', '$'), _bot_avatar())
+                                          SETTINGS.get('currency', '$'), _bot_avatar(),
+                                          back_factory=self._as_back)
 
     async def build_children(self) -> list:
         avatar = _bot_avatar()
@@ -917,50 +929,41 @@ class DashboardView(ui.LayoutView):
         stat_doc = await stats_collection.find_one({"_id": "stats"}) or {}
         monthly = stat_doc.get("monthly", {"entries": 0, "amount": 0})
 
-        notify_channel = SETTINGS.get('notify_channel_id')
-        backup_channel = SETTINGS.get('daily_backup_channel_id')
-        payment_day = SETTINGS.get("payment_day")
-
+        # صدارة الأعضاء — التاج للمركز الأول فقط، وكل عضو في سطرين مستقلين
         if rows:
-            preview = "\n".join(
-                f"{_medal(k)} {r['mention']} — 💵 **{currency}{r['net_total']:,.2f}** • 📑 {r['chapters']}"
-                for k, r in enumerate(rows[:3], 1))
+            preview_lines = []
+            for k, r in enumerate(rows[:3], 1):
+                preview_lines.append(f"{cards.rank_prefix(k)} {r['mention']}")
+                preview_lines.append(f"-# {r['chapters']} فصل • 💰 {currency}{r['net_total']:,.2f}")
+            preview = "\n".join(preview_lines)
         else:
             preview = "• لا توجد بيانات بعد."
 
-        body = "\n".join([
-            "### 📊 نبضة السيرفر",
-            f"**👥 الأعضاء:** {len(rows)} • **📑 الفصول المحتسبة:** {total_chapters}",
-            f"**💵 إجمالي المستحقات:** {currency}{total_net:,.2f}",
-            f"**📆 هذا الشهر:** 📑 {monthly.get('entries', 0)} فصل • 💵 {currency}{monthly.get('amount', 0):,.2f}",
-            f"**⏸️ أعمال معزولة:** {isolated_count}",
-            "",
-            "### 🥇 صدارة الأعضاء",
-            preview,
-            "",
-            "### ⚙️ الإعدادات الحالية",
-            f"**💰 العملة:** {currency} • **⚠️ حد التنبيه:** {currency}{SETTINGS.get('alert_threshold', 10):.2f}",
-            f"**🔔 الإشعارات:** {('<#' + str(notify_channel) + '>') if notify_channel else 'غير محدد'} • "
-            f"**💾 النسخ الاحتياطي:** {('<#' + str(backup_channel) + '>') if backup_channel else 'غير محدد'}",
-            "**📅 موعد الدفع:** " + (f"يوم {payment_day} الساعة {SETTINGS.get('payment_hour', 0)}:00"
-                                     if payment_day else "غير محدد"),
-        ])
+        pulse = (
+            f"**الأعضاء:** {len(rows)}\n"
+            f"**الفصول المحتسبة:** {total_chapters}\n"
+            f"**💰 إجمالي المستحقات:** {currency}{total_net:,.2f}\n"
+            f"**هذا الشهر:** {monthly.get('entries', 0)} فصل — {currency}{monthly.get('amount', 0):,.2f}\n"
+            f"**أعمال معزولة:** {isolated_count}"
+        )
 
         return [
-            cards.header(["## 🖥️ لوحة التحكم",
+            cards.header(["## لوحة التحكم",
                           f"<@{self.user.id}> — كل الأدوات بضغطة زر، والأزرار **تُنفّذ مباشرة**."], avatar),
             cards.sep(2),
-            cards.text(cards.clamp(body, 3500)),
+            cards.text("### نبضة السيرفر\n" + pulse),
+            cards.sep(),
+            cards.text("### صدارة الأعضاء\n" + preview),
             cards.sep(),
             cards.row(
-                cards.secondary_btn("👥 الأعضاء", self._swap(self._open_members)),
-                cards.secondary_btn("🏆 التوب", self._swap(self._open_top)),
-                cards.secondary_btn("📊 الإحصائيات", self._swap(self._open_stats)),
+                cards.secondary_btn("الأعضاء", self._swap(self._open_members)),
+                cards.secondary_btn("التوب", self._swap(self._open_top)),
+                cards.secondary_btn("الإحصائيات", self._swap(self._open_stats)),
             ),
             cards.row(
-                cards.success_btn("💳 تقرير الدفع", self._swap(self._open_payment)),
-                cards.secondary_btn("🛠️ أعضاء تخصص", self._swap(self._open_specialty)),
-                cards.success_btn("📆 ملخص شهري", self._swap(self._open_monthly)),
+                cards.secondary_btn("تقرير الدفع", self._swap(self._open_payment)),
+                cards.secondary_btn("أعضاء تخصص", self._swap(self._open_specialty)),
+                cards.secondary_btn("ملخص شهري", self._swap(self._open_monthly)),
             ),
             cards.sep(),
             cards.text(f"-# {cards.BOT_SIGNATURE}"),
@@ -981,7 +984,7 @@ async def projects_report(interaction: discord.Interaction):
     works_info = await get_works_info(interaction.guild)
     if not works_info:
         await interaction.response.send_message(view=cards.info_card(
-            "📭 لا توجد أعمال", ["لا توجد أعمال مسجلة في القائمة."], avatar_url=_bot_avatar()), ephemeral=True)
+            "لا توجد أعمال", ["لا توجد أعمال مسجلة في القائمة."], avatar_url=_bot_avatar()), ephemeral=True)
         return
 
     view = WorksPaginator(works_info, interaction.guild)
@@ -997,7 +1000,7 @@ async def stats(interaction: discord.Interaction):
     stat_doc = await stats_collection.find_one({"_id": "stats"})
     if not stat_doc:
         await interaction.response.send_message(view=cards.info_card(
-            "📭 لا توجد إحصائيات", ["لا توجد إحصائيات بعد."], avatar_url=_bot_avatar()), ephemeral=True)
+            "لا توجد إحصائيات", ["لا توجد إحصائيات بعد."], avatar_url=_bot_avatar()), ephemeral=True)
         return
 
     view = StatsView(stat_doc, interaction.guild.me, SETTINGS.get('currency', '$'),
@@ -1034,9 +1037,9 @@ async def registered_members(interaction: discord.Interaction, بحث: str = Non
     rows = _build_member_finance_rows(records, interaction.guild, بحث)
     if not rows:
         await interaction.response.send_message(view=cards.info_card(
-            "📭 لا توجد نتائج", ["لا توجد نتائج مطابقة للأعضاء المسجلين."], avatar_url=_bot_avatar()), ephemeral=True)
+            "لا توجد نتائج", ["لا توجد نتائج مطابقة للأعضاء المسجلين."], avatar_url=_bot_avatar()), ephemeral=True)
         return
-    title = "👥 الأعضاء والمستحقات"
+    title = "الأعضاء والمستحقات"
     if بحث:
         title += f" • بحث: {بحث}"
     view = MembersHubView(rows, interaction.guild, SETTINGS.get('currency', '$'), title)
@@ -1064,7 +1067,7 @@ async def specialty_members(interaction: discord.Interaction, التخصص: str)
     rows.sort(key=lambda row: (row["chapters"], row["net_total"]), reverse=True)
     if not rows:
         await interaction.response.send_message(view=cards.info_card(
-            "📭 لا يوجد أعضاء", [f"لا يوجد أعضاء مسجلون في تخصص `{specialty}`."], avatar_url=_bot_avatar()), ephemeral=True)
+            "لا يوجد أعضاء", [f"لا يوجد أعضاء مسجلون في تخصص `{specialty}`."], avatar_url=_bot_avatar()), ephemeral=True)
         return
     view = SpecialtyMembersView(rows, interaction.guild, SETTINGS.get('currency', '$'), specialty)
     await interaction.response.send_message(view=view)
@@ -1085,7 +1088,7 @@ async def my_works_slash(interaction: discord.Interaction):
     user_id = str(interaction.user.id)
     if user_id not in records or not records[user_id]:
         await interaction.response.send_message(view=cards.info_card(
-            "📭 ليس لديك أي شغل", ["لم تسجل أي فصول بعد — ابدأ بأمر /تسجيل."],
+            "ليس لديك أي شغل", ["لم تسجل أي فصول بعد — ابدأ بأمر /تسجيل."],
             avatar_url=_member_avatar(interaction.user)), ephemeral=True)
         return
 
@@ -1095,7 +1098,7 @@ async def my_works_slash(interaction: discord.Interaction):
         member=interaction.user,
         user_id=user_id,
         currency=SETTINGS.get('currency', '$'),
-        title_prefix="💼 اللوحة الشخصية •"
+        title_prefix="اللوحة الشخصية"
     )
     await interaction.response.send_message(view=view)
 
@@ -1106,7 +1109,7 @@ async def my_works_text(ctx):
     records = await load_visible_records()
     user_id = str(ctx.author.id)
     if user_id not in records or not records[user_id]:
-        await ctx.send("📭 ليس لديك أي شغل.")
+        await ctx.send("ليس لديك أي شغل مسجل بعد — ابدأ بأمر /تسجيل.")
         return
 
     works, bonuses, deductions = _categorize_records(records[user_id])
@@ -1115,7 +1118,7 @@ async def my_works_text(ctx):
         member=ctx.author,
         user_id=user_id,
         currency=SETTINGS.get('currency', '$'),
-        title_prefix="💼 اللوحة الشخصية •"
+        title_prefix="اللوحة الشخصية"
     )
     await ctx.send(view=view)
 
@@ -1136,7 +1139,7 @@ async def show_work_slash(interaction: discord.Interaction, member: discord.Memb
     user_id = str(target.id)
     if user_id not in records or not records[user_id]:
         await interaction.response.send_message(view=cards.error_card(
-            "📭 لا يوجد شغل", [f"لا يوجد شغل مسجل للعضو {target.mention}."],
+            "لا يوجد شغل", [f"لا يوجد شغل مسجل للعضو {target.mention}."],
             avatar_url=_member_avatar(target)), ephemeral=True)
         return
 
@@ -1146,7 +1149,7 @@ async def show_work_slash(interaction: discord.Interaction, member: discord.Memb
         member=target,
         user_id=user_id,
         currency=SETTINGS.get('currency', '$'),
-        title_prefix="📊 ملخص شغل"
+        title_prefix="ملخص شغل"
     )
     await interaction.response.send_message(view=view)
 
@@ -1158,7 +1161,7 @@ async def show_work_text(ctx, member: discord.Member = None):
     records = await load_visible_records()
     user_id = str(member.id)
     if user_id not in records or not records[user_id]:
-        await ctx.send(f"📭 ما عندي أي شغل للعضو {member.mention}.")
+        await ctx.send(f"لا يوجد شغل مسجل للعضو {member.mention}.")
         return
 
     works, bonuses, deductions = _categorize_records(records[user_id])
@@ -1167,7 +1170,7 @@ async def show_work_text(ctx, member: discord.Member = None):
         member=member,
         user_id=user_id,
         currency=SETTINGS.get('currency', '$'),
-        title_prefix="📊 ملخص شغل"
+        title_prefix="ملخص شغل"
     )
     await ctx.send(view=view)
 
@@ -1206,7 +1209,7 @@ def _build_member_finance_rows(records, guild, search: str = None):
         total_deduct = sum(abs(entry.get("total", 0)) for entry in deductions)
         net_total = total_works + total_bonus - total_deduct
         username_hint = _member_name_from_entries(entries)
-        display = format_member_display(guild, int(user_id), username_hint)
+        display = member_display_name(guild, int(user_id), username_hint)
         mention = f"<@{user_id}>"
         if search_text and search_text not in display.lower() and search_text not in user_id:
             continue
@@ -1264,19 +1267,20 @@ async def audit_log(interaction: discord.Interaction):
     logs = await audit_collection.find().sort("timestamp", -1).limit(20).to_list(length=20)
     if not logs:
         await interaction.response.send_message(view=cards.info_card(
-            "📜 سجل العمليات", ["لا توجد سجلات بعد."], avatar_url=_bot_avatar()), ephemeral=True)
+            "سجل العمليات", ["لا توجد سجلات بعد."], avatar_url=_bot_avatar()), ephemeral=True)
         return
 
     bullets = []
     for log in logs:
+        target_part = f" • على <@{log.get('target_id')}>" if log.get('target_id') else ""
         bullets.append(
             f"• **{log.get('action', 'غير معروف')}**\n"
-            f"-# بواسطة: <@{log.get('moderator_id')}> • للـ: {log.get('target_id') if log.get('target_id') else 'عام'}\n"
+            f"-# بواسطة <@{log.get('moderator_id')}>{target_part}\n"
             f"-# {cards.clamp(str(log.get('details')), 120)}\n"
             f"-# {str(log.get('timestamp'))[:19]}"
         )
     children: list = [
-        cards.header(["## 📜 سجل العمليات", f"**{len(logs)}** عملية أحدث أولًا."], _bot_avatar()),
+        cards.header(["## سجل العمليات", f"**{len(logs)}** عملية أحدث أولًا."], _bot_avatar()),
         cards.sep(2),
         cards.text(cards.clamp("\n\n".join(bullets), 3400)),
         cards.sep(),
@@ -1295,7 +1299,7 @@ async def my_weekly_report(interaction: discord.Interaction):
     user_id = str(interaction.user.id)
     if user_id not in records:
         await interaction.response.send_message(view=cards.info_card(
-            "📭 لا توجد سجلات", ["ليس لديك أي سجلات."], avatar_url=_member_avatar(interaction.user)), ephemeral=True)
+            "لا توجد سجلات", ["ليس لديك أي سجلات."], avatar_url=_member_avatar(interaction.user)), ephemeral=True)
         return
 
     week_ago = datetime.utcnow() - timedelta(days=7)
@@ -1305,7 +1309,7 @@ async def my_weekly_report(interaction: discord.Interaction):
     ]
     if not week_entries:
         await interaction.response.send_message(view=cards.info_card(
-            "📭 لا يوجد نشاط", ["لا يوجد فصول خلال الأسبوع الماضي."],
+            "لا يوجد نشاط", ["لا يوجد فصول خلال الأسبوع الماضي."],
             avatar_url=_member_avatar(interaction.user)), ephemeral=True)
         return
 
@@ -1316,12 +1320,13 @@ async def my_weekly_report(interaction: discord.Interaction):
         works_count[e.get("work_name", "غير محدد")] += 1
     breakdown = "\n".join(f"• **{w}:** {c} فصول" for w, c in sorted(works_count.items(), key=lambda kv: -kv[1]))
     children: list = [
-        cards.member_header(["## 📅 تقريرك الأسبوعي", f"<@{interaction.user.id}>"], interaction.user),
+        cards.member_header(["## التقرير الأسبوعي", f"<@{interaction.user.id}>"], interaction.user),
         cards.sep(2),
         cards.text(
-            f"### 📊 الحصيلة\n**المهام:** {len(week_entries)} • **المجموع:** {currency}{total:,.2f}\n\n"
-            f"### 📚 التفصيل\n{breakdown}"
+            f"### الحصيلة\n**المهام:** {len(week_entries)}\n**💰 المجموع:** {currency}{total:,.2f}"
         ),
+        cards.sep(),
+        cards.text("### التفصيل\n" + breakdown),
         cards.sep(),
         cards.text(f"-# آخر 7 أيام • {cards.BOT_SIGNATURE}"),
     ]
@@ -1343,7 +1348,7 @@ async def edit_last(interaction: discord.Interaction,
     user_id = str(interaction.user.id)
     if user_id not in records or not records[user_id]:
         await interaction.response.send_message(view=cards.info_card(
-            "📭 لا توجد سجلات", ["لا يوجد سجلات."], avatar_url=avatar), ephemeral=True)
+            "لا توجد سجلات", ["لا يوجد سجلات."], avatar_url=avatar), ephemeral=True)
         return
 
     last = records[user_id][-1]
@@ -1358,7 +1363,7 @@ async def edit_last(interaction: discord.Interaction,
         norm_type = map_type(التخصص)
         if norm_type not in PRICES:
             await interaction.response.send_message(view=cards.error_card(
-                "❌ التخصص غير صحيح", [f"التخصص `{التخصص}` غير موجود في القائمة."], avatar_url=avatar), ephemeral=True)
+                "التخصص غير صحيح", [f"التخصص `{التخصص}` غير موجود في القائمة."], avatar_url=avatar), ephemeral=True)
             return
         last["work_type"] = norm_type
         last["total"] = PRICES[norm_type]
@@ -1371,6 +1376,6 @@ async def edit_last(interaction: discord.Interaction,
     await update_stats()
     detail = "\n".join(changed) or "لم تحدد أي تغيير."
     await interaction.response.send_message(view=cards.success_card(
-        "✅ تم تعديل آخر سجل",
+        "تم تعديل آخر سجل",
         [f"<@{interaction.user.id}>", detail],
         avatar_url=avatar), ephemeral=True)

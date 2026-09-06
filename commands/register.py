@@ -41,7 +41,7 @@ def build_receipt_card(
     chapters_str = "، ".join(f"فصل {ch}" for ch in added_chapters) or "—"
 
     label_line = f"**{work_name}** — {chapters_str}"
-    header_lines = ["## 🧾 إيصال التسجيل جاهز", f"<@{requester.id}>", label_line]
+    header_lines = ["## إيصال التسجيل جاهز", f"<@{requester.id}>", label_line]
 
     children: list = [cards.header(header_lines, avatar_url), cards.sep(2)]
 
@@ -70,13 +70,13 @@ def build_receipt_card(
         children += [cards.sep(), cards.text(f"**تفاصيل التخصصات**\n{cards.clamp(types_summary, 900)}")]
 
     # سطر النتيجة النهائية
-    final_lines = [f"**الإجمالي:** {currency}{total_amount:.2f}"]
+    final_lines = [f"**💰 الإجمالي:** {currency}{total_amount:.2f}"]
     if added_by and added_by.id != requester.id:
-        final_lines.append(f"**🛡️ أضيف بواسطة:** <@{added_by.id}>")
+        final_lines.append(f"**أضيف بواسطة:** <@{added_by.id}>")
     if notes:
-        final_lines.append(f"**📝 ملاحظات:** {cards.clamp(notes, 300)}")
+        final_lines.append(f"**الملاحظات:** {cards.clamp(notes, 300)}")
     now = datetime.utcnow()
-    final_lines.append(f"**📅 تاريخ العملية:** {now.strftime('%Y-%m-%d %I:%M %p')} UTC")
+    final_lines.append(f"**تاريخ العملية:** {now.strftime('%Y-%m-%d %I:%M %p')} UTC")
     children += [cards.sep(), cards.text("\n".join(final_lines))]
 
     children += [cards.sep(), cards.text(f"-# {cards.BOT_SIGNATURE}")]
@@ -99,38 +99,38 @@ async def validate_registration(
     work = await get_work(work_name)
     if not work:
         return None, None, None, 0, None, cards.error_card(
-            "❌ تعذر بدء التسجيل",
+            "تعذر بدء التسجيل",
             [f"العمل `{work_name}` غير موجود في قائمة الأعمال المدفوعة. تواصل مع الإدارة."],
             avatar_url=avatar_url)
     if not work.get("active", True):
         return None, None, None, 0, None, cards.error_card(
-            "❌ تعذر بدء التسجيل",
+            "تعذر بدء التسجيل",
             [f"العمل `{work_name}` معطل حالياً."],
             avatar_url=avatar_url)
     if is_work_isolated(work):
         return None, None, None, 0, None, cards.error_card(
-            "❌ تعذر بدء التسجيل",
+            "تعذر بدء التسجيل",
             [f"العمل `{work_name}` معزول حالياً عن التسجيل والحسابات حتى تسترجعه الإدارة."],
             avatar_url=avatar_url)
 
     chapters_list = parse_chapter_range(chapters_input)
     if not chapters_list:
         return None, None, None, 0, None, cards.error_card(
-            "❌ تعذر بدء التسجيل",
+            "تعذر بدء التسجيل",
             ["نطاق الفصول غير صالح. استخدم مثلاً `5` أو `1-5` أو `1,3,5`."],
             avatar_url=avatar_url)
 
     paid_chapters, free_count = filter_paid_chapters(work, chapters_list)
     if not paid_chapters:
         return None, None, None, 0, None, cards.error_card(
-            "⚠️ جميع الفصول مجانية",
+            "جميع الفصول مجانية",
             ["جميع الفصول المدخلة مجانية ولم تُسجّل."],
             avatar_url=avatar_url)
 
     original_types = parse_mixed_types(types_input, len(chapters_list))
     if original_types is None:
         return None, None, None, 0, None, cards.error_card(
-            "❌ تعذر بدء التسجيل",
+            "تعذر بدء التسجيل",
             [f"عدد التخصصات لا يتطابق مع عدد الفصول ({len(chapters_list)})."],
             avatar_url=avatar_url)
 
@@ -148,7 +148,7 @@ async def validate_registration(
         for t in filtered_types:
             if t not in allowed_specs:
                 return None, None, None, 0, None, cards.error_card(
-                    "❌ تعذر بدء التسجيل",
+                    "تعذر بدء التسجيل",
                     [f"التخصص `{t}` غير مسموح به في عمل `{work_name}`.\n"
                      f"التخصصات المتاحة لهذا العمل: {', '.join(allowed_specs)}"],
                     avatar_url=avatar_url)
@@ -156,7 +156,7 @@ async def validate_registration(
         for t in filtered_types:
             if t not in PRICES:
                 return None, None, None, 0, None, cards.error_card(
-                    "❌ تعذر بدء التسجيل",
+                    "تعذر بدء التسجيل",
                     [f"التخصص `{t}` غير صحيح. التخصصات المتاحة: {', '.join(PRICES.keys())}"],
                     avatar_url=avatar_url)
 
@@ -215,7 +215,7 @@ async def register_slash(interaction: discord.Interaction, العمل: str, ال
     added = len(added_chapters_list)
     if added == 0:
         await interaction.response.send_message(view=cards.error_card(
-            "⚠️ لم يُسجّل شيء جديد",
+            "لم يُسجّل شيء جديد",
             ["لم يتم إضافة أي فصل جديد (جميع الفصول إما مكررة أو مجانية)."],
             avatar_url=avatar_url), ephemeral=True)
         return
@@ -247,13 +247,13 @@ async def register_slash(interaction: discord.Interaction, العمل: str, ال
     if notify_channel_id:
         channel = interaction.guild.get_channel(notify_channel_id)
         if channel:
-            await channel.send(f"📢 {interaction.user.mention} أضاف {added} فصول مدفوعة في عمل `{العمل}`")
+            await channel.send(f"{interaction.user.mention} أضاف {added} فصول مدفوعة في عمل `{العمل}`")
 
     total_user_amount = sum(item.get("total", 0) for item in records[user_id])
     threshold = SETTINGS.get("alert_threshold", 10.0)
     if total_user_amount >= threshold:
         try:
-            await interaction.user.send(f"🔔 تنبيه: إجمالي شغلك وصل إلى {SETTINGS.get('currency', '$')}{total_user_amount:.2f}.")
+            await interaction.user.send(f"تنبيه: إجمالي شغلك وصل إلى {SETTINGS.get('currency', '$')}{total_user_amount:.2f}.")
         except:
             pass
 
@@ -323,7 +323,7 @@ async def register_for_member(
     added = len(added_chapters_list)
     if added == 0:
         await interaction.response.send_message(view=cards.error_card(
-            "⚠️ لم يُسجّل شيء جديد",
+            "لم يُسجّل شيء جديد",
             ["لم يتم إضافة أي فصل جديد (جميع الفصول مكررة)."],
             avatar_url=avatar_url), ephemeral=True)
         return
@@ -355,13 +355,13 @@ async def register_for_member(
     if notify_channel_id:
         channel = interaction.guild.get_channel(notify_channel_id)
         if channel:
-            await channel.send(f"📢 {interaction.user.mention} أضاف {added} فصول مدفوعة للعضو {عضو.mention} في عمل `{العمل}`")
+            await channel.send(f"{interaction.user.mention} أضاف {added} فصول مدفوعة للعضو {عضو.mention} في عمل `{العمل}`")
 
     await log_audit("تسجيل_للغير", interaction.user.id, عضو.id,
                     f"أضاف {added} فصل لـ {العمل} (التخصصات: {','.join(filtered_types)})")
 
     try:
-        await عضو.send(f"📬 تم تسجيل {added} فصول مدفوعة لك في عمل `{العمل}` بواسطة {interaction.user.mention}.")
+        await عضو.send(f"تم تسجيل {added} فصول مدفوعة لك في عمل `{العمل}` بواسطة {interaction.user.mention}.")
     except:
         pass
 
@@ -378,7 +378,7 @@ async def analysis(ctx, *, text_input=None):
         # بطاقة طلب المدخلات — نفس بنية بطاقات «أرسل … خلال دقيقتين» في بوت السحب
         available = "، ".join(PRICES.keys()) or "لا توجد تخصصات"
         prompt = cards.info_card(
-            "✍️ أرسل بيانات التسجيل",
+            "أرسل بيانات التسجيل",
             [
                 "**1.** اكتب سطر `العمل:` باسم العمل كما يظهر في /الأعمال.",
                 "**2.** اكتب سطر `الفصل:` برقم أو نطاق مثل `1-5`.",
@@ -399,7 +399,7 @@ async def analysis(ctx, *, text_input=None):
 
     if not work_name or not chapter_str or not types_str:
         await ctx.send(view=cards.error_card(
-            "❌ تعذر بدء التسجيل",
+            "تعذر بدء التسجيل",
             ["فيه بيانات ناقصة. لازم تكتب: `العمل`، `الفصل`، `التخصص`."],
             avatar_url=avatar_url))
         return
@@ -444,7 +444,7 @@ async def analysis(ctx, *, text_input=None):
     added = len(added_chapters_list)
     if added == 0:
         await ctx.send(view=cards.error_card(
-            "⚠️ لم يُسجّل شيء جديد",
+            "لم يُسجّل شيء جديد",
             ["لم يتم إضافة أي فصل جديد (جميع الفصول مكررة)."],
             avatar_url=avatar_url))
         return
@@ -476,12 +476,12 @@ async def analysis(ctx, *, text_input=None):
     if notify_channel_id:
         channel = ctx.guild.get_channel(notify_channel_id)
         if channel:
-            await channel.send(f"📢 {ctx.author.mention} أضاف {added} فصول مدفوعة في عمل `{work_name}`")
+            await channel.send(f"{ctx.author.mention} أضاف {added} فصول مدفوعة في عمل `{work_name}`")
 
     total_user_amount = sum(item.get("total", 0) for item in records[user_id])
     threshold = SETTINGS.get("alert_threshold", 10.0)
     if total_user_amount >= threshold:
         try:
-            await ctx.author.send(f"🔔 تنبيه: إجمالي شغلك وصل إلى {SETTINGS.get('currency', '$')}{total_user_amount:.2f}.")
+            await ctx.author.send(f"تنبيه: إجمالي شغلك وصل إلى {SETTINGS.get('currency', '$')}{total_user_amount:.2f}.")
         except:
             pass

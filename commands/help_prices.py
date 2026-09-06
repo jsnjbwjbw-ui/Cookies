@@ -22,7 +22,7 @@ def build_help_card(avatar_url: str | None, user_mention: str) -> cards.Card:
     children: list = [
         cards.header(
             [
-                "## 📖 Cookies Tracker",
+                "## Cookies Tracker",
                 f"أهلاً {user_mention} — بوت إدارة فلوس فريق كوكيز: سجّل فصولك، وتابع مستحقاتك، "
                 "ويحسب البوت كل شيء بدقة حتى يوم الدفع.",
             ],
@@ -32,7 +32,7 @@ def build_help_card(avatar_url: str | None, user_mention: str) -> cards.Card:
     ]
 
     def command_block(title: str, body: str):
-        children.append(cards.text(f"### 🔹 {title}\n{body}"))
+        children.append(cards.text(f"### {title}\n{body}"))
         children.append(cards.sep())
 
     # ── أوامر الأعضاء ──
@@ -51,16 +51,16 @@ def build_help_card(avatar_url: str | None, user_mention: str) -> cards.Card:
                   "ثم فصول أي عضو مرتبة رقميًا (ملخص ← تخصصات ← فصول).")
     command_block("/احصائيات", "لوحة إحصائيات تفاعلية: نظرة عامة، التخصصات، الزمني، والأفضل.")
     command_block("/توب", "ترتيب الأعضاء حسب المبلغ أو عدد الفصول أو داخل تخصص محدد — "
-                  "مع الميداليات 🥇🥈🥉 وكلا المعيارين في كل سطر.")
+                  "كل عضو في سطرين مستقلين، والمركز الأول يحمل التاج.")
     command_block("/مساعدة", "عرض هذا الدليل.")
 
     # ── أوامر الإدارة ──
     children.append(cards.text(
-        "### 🔹 أوامر الإدارة\n"
+        "### أوامر الإدارة\n"
         "• `/تسجيل_للغير` — تسجيل شغل لعضو معين (الإيصال بصورة العضو).\n"
         "• `/الأعضاء` — قائمة الأعضاء والمستحقات مع قائمة منسدلة تفتح **تفاصيل دقيقة** لكل عضو.\n"
         "• `/اعضاء_تخصص` — أعضاء تخصص محدد مرتبين حسب الفصول.\n"
-        "• `/لوحة_التحكم` — مركز إدارة: كل زر **ينفّذ** قسمه مباشرة (أعضاء، توب، إحصائيات، تقرير دفع…).\n"
+        "• `/لوحة_التحكم` — مركز إدارة: كل زر **ينفّذ** قسمه مباشرة، وكل قسم له زر رجوع.\n"
         "• `/تعديل_سعر` و `/تحديث_أسعار` — تعديل سعر تخصص وتطبيقه بأثر رجعي.\n"
         "• `/اضافة_تخصص` • `/حذف_تخصص` • `/تفعيل_تخصص` • `/تعطيل_تخصص` — إدارة التخصصات.\n"
         "• `/اضافة_عمل` • `/حذف_عمل` • `/تعديل_عمل` — إدارة الأعمال.\n"
@@ -112,7 +112,7 @@ async def prices_slash(interaction: discord.Interaction):
     avatar_url = bot_avatar(interaction)
     currency = SETTINGS.get('currency', '$') or '$'
     children: list = [
-        cards.header(["## 🏷️ أسعار التخصصات", f"**{len(PRICES)}** تخصصات متاحة بسعر الفصل الواحد."], avatar_url),
+        cards.header(["## أسعار التخصصات", f"**{len(PRICES)}** تخصصات متاحة بسعر الفصل الواحد."], avatar_url),
         cards.sep(2),
     ]
     if PRICES:
@@ -132,7 +132,7 @@ async def prices_slash(interaction: discord.Interaction):
         children.append(cards.sep(2))
         custom_bullets = "\n".join(f"• **{spec.replace('_', ' ').title()}** — {currency}{float(price):.2f}"
                                    for spec, price in custom.items())
-        children.append(cards.text(f"**📌 تخصيصات عمل «{work_name}»**\n{custom_bullets}"))
+        children.append(cards.text(f"**تخصيصات عمل «{work_name}»**\n{custom_bullets}"))
     if len(custom_groups) > 5:
         children.append(cards.sep())
         children.append(cards.text(f"-# و{len(custom_groups) - 5} أعمال أخرى لها تخصيصات سعرية…"))
@@ -155,7 +155,7 @@ async def edit_price_slash(interaction: discord.Interaction, التخصص: str, 
     norm_type = map_type(التخصص)
     if norm_type not in SETTINGS.get("specialties", {}):
         await interaction.response.send_message(view=cards.error_card(
-            "❌ التخصص غير موجود",
+            "التخصص غير موجود",
             [f"التخصص `{التخصص}` غير موجود في القائمة."],
             avatar_url=avatar_url), ephemeral=True)
         return
@@ -165,7 +165,7 @@ async def edit_price_slash(interaction: discord.Interaction, التخصص: str, 
     rebuild_prices()
     currency = SETTINGS.get('currency', '$') or '$'
     await interaction.response.send_message(view=cards.success_card(
-        "✅ تم تحديث السعر",
+        "تم تحديث السعر",
         [f"التخصص **{norm_type.replace('_', ' ').title()}** — السعر الجديد: **{currency}{السعر:.2f}** لكل فصل.",
          "-# تذكير: لا تنس استخدام الأمر `/تحديث_أسعار` لتطبيق السعر الجديد على السجلات القديمة إذا كنت ترغب في ذلك."],
         avatar_url=avatar_url), ephemeral=True)

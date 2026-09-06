@@ -24,10 +24,18 @@ def is_admin(interaction: discord.Interaction) -> bool:
 
 
 def channel_allowed(interaction: discord.Interaction) -> bool:
-    """فحص آمن للقناة المسموحة (يعمل مع الثريدات والقنوات بدون اسم)."""
+    """فحص القناة المسموحة — يقبل **المعرف الرقمي** أو الاسم معًا:
+    أمر /تحديد_قنوات يحفظ معرف القناة (int)، لذا المقارنة بالاسم وحده
+    كانت ترفض القناة المحددة نفسها. يعمل هذا الفحص مع الثريدات أيضًا."""
     ch = getattr(interaction, "channel", None)
+    if ch is None:
+        return False
+    allowed = SETTINGS.get("allowed_channels", [])
+    ch_id = getattr(ch, "id", None)
+    if ch_id is not None and ch_id in allowed:
+        return True
     name = getattr(ch, "name", None)
-    return bool(name) and name in SETTINGS.get("allowed_channels", [])
+    return bool(name) and name in allowed
 
 
 def sort_entries_by_chapter(entries: list) -> list:
@@ -51,9 +59,10 @@ def entry_datetime(entry: dict):
         return None
 
 
-def build_monthly_summary_card(user, month_entries: list, currency: str = "$", avatar_url=None):
+def build_monthly_summary_card(user, month_entries: list, currency: str = "$", avatar_url=None, back_factory=None):
     """بطاقة الملخص الشهري الموحدة — تُستخدم في /ملخص_شهري وفي زر
-    «ملخص شهري» داخل لوحة التحكم حتى لا يختلف التصميم أبدًا."""
+    «ملخص شهري» داخل لوحة التحكم حتى لا يختلف التصميم أبدًا.
+    عند تمرير back_factory يُضاف زر «عودة إلى لوحة التحكم» أسفل البطاقة."""
     from ui import cards  # استيراد مؤجل لتجنب أي دورة استيراد
 
     currency = currency or "$"
@@ -68,44 +77,65 @@ def build_monthly_summary_card(user, month_entries: list, currency: str = "$", a
     types_count = defaultdict(int)
     for e in work_entries:
         types_count[e.get("work_type", "غير محدد")] += 1
+    net = total + bonuses - deductions
+
+    # كل رقم في سطر مستقل — لا حشو في سطر واحد أبدًا
+    stats_lines = [f"**الفصول:** {len(work_entries)}"]
+    if bonuses:
+        stats_lines.append(f"**المكافآت:** {currency}{bonuses:,.2f}")
+    if deductions:
+        stats_lines.append(f"**الخصومات:** {currency}{deductions:,.2f}")
+    stats_lines.append(f"**💰 الصافي المستحق:** {currency}{net:,.2f}")
 
     works_lines = [f"• **{w}** — {c} فصول" for w, c in sorted(works_count.items(), key=lambda kv: -kv[1])] or ["• لا يوجد"]
     types_lines = [f"• **{t.replace('_', ' ').title()}** — {c} فصول"
                    for t, c in sorted(types_count.items(), key=lambda kv: -kv[1])] or ["• لا يوجد"]
-    net = total + bonuses - deductions
-
-    body = "\n".join([
-        "### 📊 الحصيلة الشهرية",
-        f"**📑 الفصول:** {len(work_entries)} • **🎁 المكافآت:** {currency}{bonuses:,.2f} • "
-        f"**🔻 الخصومات:** {currency}{deductions:,.2f}",
-        f"**💵 الصافي المستحق:** {currency}{net:,.2f}",
-        "",
-        "### 📚 تفصيل الأعمال",
-        *works_lines,
-        "",
-        "### 🛠️ تفصيل التخصصات",
-        *types_lines,
-    ])
 
     thumb = avatar_url
     if thumb is None and hasattr(user, "display_avatar"):
         thumb = user.display_avatar.url
+
+    head = (cards.member_header(["## الملخص الشهري", f"<@{user.id}>"], user) if thumb
+            else cards.header(["## الملخص الشهري", f"<@{user.id}>"], None))
+
     children = [
-        cards.member_header(["## 📆 الملخص الشهري", f"<@{user.id}>"], user) if thumb else cards.header(["## 📆 الملخص الشهري", f"<@{user.id}>"], None),
+        head,
         cards.sep(2),
-        cards.text(cards.clamp(body, 3500)),
+        cards.text("\n".join(stats_lines)),
+        cards.sep(),
+        cards.text("### تفصيل الأعمال\n" + "\n".join(works_lines)),
+        cards.sep(),
+        cards.text("### تفصيل التخصصات\n" + "\n".join(types_lines)),
+    ]
+    if back_factory is not None:
+        async def _back(interaction: discord.Interaction):
+            parent = back_factory()
+            if hasattr(parent, "__await__"):
+                parent = await parent
+            await interaction.response.edit_message(view=parent)
+        children += [
+            cards.sep(),
+            cards.row(cards.secondary_btn("عودة إلى لوحة التحكم", _back, emoji="↩")),
+        ]
+    children += [
         cards.sep(),
         cards.text(f"-# من بداية الشهر حتى الآن • {cards.BOT_SIGNATURE}"),
     ]
     return cards.Card(cards.ACCENT_GOLD, *children)
 
-def format_member_display(guild: discord.Guild, user_id: int, username_hint: str = None) -> str:
-    member = guild.get_member(user_id)
+def member_display_name(guild: discord.Guild | None, user_id, username_hint: str = None) -> str:
+    """اسم العضو في السيرفر (النك نيم) — يُستخدم داخل القوائم المنسدلة فقط."""
+    member = guild.get_member(int(user_id)) if guild else None
     if member:
-        return f"@{member.name}"
+        return member.display_name
     if username_hint:
-        return f"@{username_hint}"
+        return username_hint
     return str(user_id)
+
+
+def member_mention(user_id) -> str:
+    """المنشن الحقيقي الوحيد المسموح في كل رسائل البوت: <@ID>."""
+    return f"<@{user_id}>"
 
 async def load_works() -> list:
     doc = await collection.find_one({"_id": "works"})
@@ -477,46 +507,6 @@ def is_duplicate(records, user_id, work_name, chapter, work_type):
 # ----------------------------------------------------------------------
 # Unified UI helpers
 # ----------------------------------------------------------------------
-EMBED_COLORS = {
-    "success": discord.Color.green(),
-    "danger": discord.Color.red(),
-    "warning": discord.Color.orange(),
-    "info": discord.Color.blue(),
-    "admin": discord.Color.purple(),
-    "finance": discord.Color.gold(),
-    "muted": discord.Color.light_grey(),
-}
-
-def make_embed(kind: str, title: str, description: str = "", interaction: discord.Interaction | None = None, member: discord.Member | None = None):
-    emb = discord.Embed(title=title, description=description, color=EMBED_COLORS.get(kind, discord.Color.blurple()))
-    if member:
-        emb.set_thumbnail(url=member.display_avatar.url)
-    footer = "Cookies Tracker • TEAM Cookies"
-    if interaction:
-        footer += f" • {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
-    emb.set_footer(text=footer)
-    return emb
-
-class ConfirmActionView(discord.ui.View):
-    def __init__(self, on_confirm, on_preview=None, timeout=60):
-        super().__init__(timeout=timeout)
-        self._on_confirm = on_confirm
-        self._on_preview = on_preview
-
-    @discord.ui.button(label="🗑️ تأكيد الحذف", style=discord.ButtonStyle.danger)
-    async def confirm_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._on_confirm(interaction)
-
-    @discord.ui.button(label="ℹ️ عرض التفاصيل", style=discord.ButtonStyle.primary)
-    async def preview_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self._on_preview:
-            await self._on_preview(interaction)
-        else:
-            await interaction.response.send_message("لا توجد تفاصيل إضافية.", ephemeral=True)
-
-    @discord.ui.button(label="إلغاء", style=discord.ButtonStyle.secondary)
-    async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(content="تم إلغاء العملية.", view=None)
 
 
 # ----------------------------------------------------------------------

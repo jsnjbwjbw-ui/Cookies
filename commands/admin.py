@@ -74,25 +74,24 @@ async def bot_settings(interaction: discord.Interaction, العملة: str = Non
     backup_channel = SETTINGS.get('daily_backup_channel_id')
     payment_day = SETTINGS.get("payment_day")
     channels = SETTINGS.get("allowed_channels", [])
-    channels_str = "، ".join(f"<#{ch}>" if isinstance(ch, int) else f"#{ch}" for ch in channels) or "غير محددة"
+    channels_str = "\n".join(f"• <#{ch}>" if isinstance(ch, int) else f"• #{ch}" for ch in channels) or "• غير محددة"
 
     children: list = [
-        cards.header(["## ⚙️ إعدادات هذا السيرفر", f"سيرفر **{interaction.guild.name}**"], avatar),
+        cards.header(["## إعدادات هذا السيرفر", f"سيرفر **{interaction.guild.name}**"], avatar),
         cards.sep(2),
     ]
     if changed_lines:
         children.append(cards.text("**التغييرات المطبقة**\n" + "\n".join(changed_lines)))
         children.append(cards.sep())
     children.append(cards.text(
-        "**ما هو مطبق الآن في هذا السيرفر:**\n"
-        f"**1. 💰 المال** — العملة: **{currency}** — حد التنبيه: **{currency}{SETTINGS.get('alert_threshold', 10):.2f}**\n"
-        f"**2. 🔔 القنوات** — الإشعارات: " +
-        (f"**<#{notify_channel}>**" if notify_channel else "**غير محدد**") +
-        " — النسخ الاحتياطي: " +
-        (f"**<#{backup_channel}>**" if backup_channel else "**غير محدد**") +
-        f"\n**3. 📢 قنوات التسجيل** — {channels_str}\n"
-        f"**4. 📅 موعد الدفع** — " +
-        (f"**يوم {payment_day} الساعة {SETTINGS.get('payment_hour', 0)}:00**" if payment_day else "**غير محدد**")
+        "**ما هو مطبق الآن في هذا السيرفر:**\n\n"
+        f"**المال**\nالعملة: **{currency}**\nحد التنبيه: **{currency}{SETTINGS.get('alert_threshold', 10):.2f}**\n\n"
+        "**القنوات**\n"
+        f"الإشعارات: {(f'<#{notify_channel}>' if notify_channel else 'غير محدد')}\n"
+        f"النسخ الاحتياطي: {(f'<#{backup_channel}>' if backup_channel else 'غير محدد')}\n\n"
+        f"**قنوات التسجيل**\n{channels_str}\n\n"
+        "**موعد الدفع**\n" +
+        (f"يوم {payment_day} الساعة {SETTINGS.get('payment_hour', 0)}:00" if payment_day else "غير محدد")
     ))
     children.append(cards.sep())
     children.append(cards.text(
@@ -119,7 +118,7 @@ async def add_work(interaction: discord.Interaction, الاسم: str, بداية
     works = await load_works()
     if any(w["name"] == الاسم for w in works):
         await interaction.response.send_message(view=cards.error_card(
-            "❌ العمل موجود بالفعل", [f"العمل `{الاسم}` موجود مسبقًا في القائمة."], avatar_url=avatar), ephemeral=True)
+            "العمل موجود بالفعل", [f"العمل `{الاسم}` موجود مسبقًا في القائمة."], avatar_url=avatar), ephemeral=True)
         return
     new_work = {"name": الاسم, "paid_start": بداية_الفصول_المدفوعة, "active": نشط}
     works.append(new_work)
@@ -132,7 +131,7 @@ async def add_work(interaction: discord.Interaction, الاسم: str, بداية
         f"{'✓ الحالة — نشط' if نشط else '⊘ الحالة — معطل'}",
     ]
     children = [
-        cards.header(["## ✅ تمت إضافة العمل", f"<@{interaction.user.id}>"], avatar),
+        cards.header(["## تمت إضافة العمل", f"<@{interaction.user.id}>"], avatar),
         cards.sep(2),
         cards.text("\n".join(checklist)),
         cards.sep(),
@@ -154,7 +153,7 @@ async def delete_work(interaction: discord.Interaction, العمل: str):
     target = next((w for w in works if w["name"] == العمل), None)
     if not target:
         await interaction.response.send_message(view=cards.error_card(
-            "❌ العمل غير موجود", [f"العمل `{العمل}` غير موجود في القائمة."], avatar_url=avatar), ephemeral=True)
+            "العمل غير موجود", [f"العمل `{العمل}` غير موجود في القائمة."], avatar_url=avatar), ephemeral=True)
         return
 
     async def delete_with_records(interaction2: discord.Interaction):
@@ -163,9 +162,9 @@ async def delete_work(interaction: discord.Interaction, العمل: str):
             new_works = [w for w in works if w["name"] != العمل]
             await save_works(new_works)
             await log_audit("حذف_عمل_مع_السجلات", interaction2.user.id, None, f"حذف {العمل} و {removed} سجل")
-            await _finish(interaction3, "✅ تم حذف العمل وسجلاته",
+            await _finish(interaction3, "تم حذف العمل وسجلاته",
                           [f"حُذف عمل «{العمل}» مع كل سجلاته.", f"**السجلات المحذوفة:** {removed}"])
-        await _confirm_card(interaction2, "⚠️ تأكيد نهائي",
+        await _confirm_card(interaction2, "تأكيد نهائي",
                             f"سيتم حذف العمل «{العمل}» **وكل سجلاته** نهائيًا.", confirm)
 
     async def delete_work_only(interaction2: discord.Interaction):
@@ -173,17 +172,17 @@ async def delete_work(interaction: discord.Interaction, العمل: str):
             new_works = [w for w in works if w["name"] != العمل]
             await save_works(new_works)
             await log_audit("حذف_عمل_فقط", interaction2.user.id, None, f"حذف {العمل} من القائمة (السجلات باقية)")
-            await _finish(interaction3, "✅ تم حذف العمل من القائمة",
+            await _finish(interaction3, "تم حذف العمل من القائمة",
                           [f"حُذف عمل «{العمل}» من القائمة.", "السجلات لم تُمس."])
-        await _confirm_card(interaction2, "⚠️ تأكيد",
+        await _confirm_card(interaction2, "تأكيد",
                             f"سيتم حذف العمل «{العمل}» من القائمة فقط (السجلات تبقى).", confirm)
 
     children: list = [
-        cards.header(["## 🗑️ حذف العمل", f"**«{العمل}»** — اختر الطريقة:"], avatar),
+        cards.header(["## حذف العمل", f"**«{العمل}»** — اختر الطريقة:"], avatar),
         cards.sep(2),
         cards.row(
             cards.danger_btn("حذف العمل وكل سجلاته", delete_with_records),
-            cards.make_button("حذف العمل فقط (إخفاؤه)", style=discord.ButtonStyle.primary, callback=delete_work_only),
+            cards.make_button("حذف العمل فقط (إخفاؤه)", style=discord.ButtonStyle.secondary, callback=delete_work_only),
             cards.secondary_btn("إلغاء", _cancel_to_muted),
         ),
         cards.sep(),
@@ -194,7 +193,7 @@ async def delete_work(interaction: discord.Interaction, العمل: str):
 
 async def _cancel_to_muted(interaction: discord.Interaction):
     await interaction.response.edit_message(view=cards.muted_card(
-        "🚫 أُلغيت العملية", ["لم يُحذف أي شيء."], avatar_url=_bot_avatar()))
+        "أُلغيت العملية", ["لم يُحذف أي شيء."], avatar_url=_bot_avatar()))
 
 
 async def _confirm_card(interaction: discord.Interaction, title: str, detail: str, on_confirm):
@@ -233,13 +232,13 @@ async def edit_work(interaction: discord.Interaction, العمل: str, الاس�
     target = next((w for w in works if w["name"] == العمل), None)
     if not target:
         await interaction.response.send_message(view=cards.error_card(
-            "❌ العمل غير موجود", [f"العمل `{العمل}` غير موجود في القائمة."], avatar_url=avatar), ephemeral=True)
+            "العمل غير موجود", [f"العمل `{العمل}` غير موجود في القائمة."], avatar_url=avatar), ephemeral=True)
         return
     changed = []
     if الاسم_الجديد and الاسم_الجديد != target["name"]:
         if any(w["name"] == الاسم_الجديد for w in works):
             await interaction.response.send_message(view=cards.error_card(
-                "❌ الاسم موجود مسبقاً", [f"الاسم `{الاسم_الجديد}` مستخدم بالفعل."], avatar_url=avatar), ephemeral=True)
+                "الاسم موجود مسبقاً", [f"الاسم `{الاسم_الجديد}` مستخدم بالفعل."], avatar_url=avatar), ephemeral=True)
             return
         target["name"] = الاسم_الجديد
         changed.append(f"الاسم ← {الاسم_الجديد}")
@@ -254,13 +253,13 @@ async def edit_work(interaction: discord.Interaction, العمل: str, الاس�
         changed.append(f"نشط ← {نشط}")
     if not changed:
         await interaction.response.send_message(view=cards.info_card(
-            "ℹ️ لا تغييرات", ["لم تقم بأي تغيير."], avatar_url=avatar), ephemeral=True)
+            "لا تغييرات", ["لم تقم بأي تغيير."], avatar_url=avatar), ephemeral=True)
         return
     await save_works(works)
     await log_audit("تعديل_عمل", interaction.user.id, None, f"تعديل {العمل}: {', '.join(changed)}")
     checklist = "\n".join(f"✓ {c}" for c in changed)
     await interaction.response.send_message(view=cards.success_card(
-        "✅ تم تعديل العمل", [f"**«{العمل}»**\n{checklist}"], avatar_url=avatar), ephemeral=True)
+        "تم تعديل العمل", [f"**«{العمل}»**\n{checklist}"], avatar_url=avatar), ephemeral=True)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -328,11 +327,11 @@ async def isolate_work(interaction: discord.Interaction, العمل: str, الس
     target = next((w for w in works if w["name"] == العمل), None)
     if not target:
         await interaction.response.send_message(view=cards.error_card(
-            "❌ العمل غير موجود", [f"العمل `{العمل}` غير موجود في القائمة."], avatar_url=avatar), ephemeral=True)
+            "العمل غير موجود", [f"العمل `{العمل}` غير موجود في القائمة."], avatar_url=avatar), ephemeral=True)
         return
     if is_work_isolated(target):
         await interaction.response.send_message(view=cards.info_card(
-            "ℹ️ العمل معزول بالفعل", [f"العمل `{العمل}` معزول بالفعل."], avatar_url=avatar), ephemeral=True)
+            "العمل معزول بالفعل", [f"العمل `{العمل}` معزول بالفعل."], avatar_url=avatar), ephemeral=True)
         return
     target["isolated"] = True
     target["isolated_at"] = datetime.utcnow().isoformat()
@@ -343,7 +342,7 @@ async def isolate_work(interaction: discord.Interaction, العمل: str, الس
     await update_stats()
     await log_audit("عزل_عمل", interaction.user.id, None, f"عزل العمل {العمل} - السبب: {السبب or 'غير محدد'}")
     await interaction.response.send_message(view=cards.success_card(
-        "⏸️ تم عزل العمل",
+        "تم عزل العمل",
         [f"عُزل عمل «{العمل}» — لن تظهر فصوله في المستحقات والتقارير حتى يتم استرجاعه.",
          f"-# السبب: {السبب or 'غير محدد'}"],
         avatar_url=avatar), ephemeral=True)
@@ -363,11 +362,11 @@ async def restore_work(interaction: discord.Interaction, العمل: str):
     target = next((w for w in works if w["name"] == العمل), None)
     if not target:
         await interaction.response.send_message(view=cards.error_card(
-            "❌ العمل غير موجود", [f"العمل `{العمل}` غير موجود في القائمة."], avatar_url=avatar), ephemeral=True)
+            "العمل غير موجود", [f"العمل `{العمل}` غير موجود في القائمة."], avatar_url=avatar), ephemeral=True)
         return
     if not is_work_isolated(target):
         await interaction.response.send_message(view=cards.info_card(
-            "ℹ️ العمل غير معزول", [f"العمل `{العمل}` غير معزول حالياً."], avatar_url=avatar), ephemeral=True)
+            "العمل غير معزول", [f"العمل `{العمل}` غير معزول حالياً."], avatar_url=avatar), ephemeral=True)
         return
     for key in ["isolated", "isolated_at", "isolated_by", "isolation_reason"]:
         target.pop(key, None)
@@ -375,7 +374,7 @@ async def restore_work(interaction: discord.Interaction, العمل: str):
     await update_stats()
     await log_audit("استرجاع_عمل", interaction.user.id, None, f"استرجاع العمل {العمل} من العزل")
     await interaction.response.send_message(view=cards.success_card(
-        "✅ تم استرجاع العمل",
+        "تم استرجاع العمل",
         [f"عاد عمل «{العمل}» وظهرت فصوله في الحسابات والتقارير من جديد."],
         avatar_url=avatar), ephemeral=True)
 
@@ -398,7 +397,7 @@ async def set_work_specialty_price(interaction: discord.Interaction, العمل:
     target = next((w for w in works if w["name"] == العمل), None)
     if not target:
         await interaction.response.send_message(view=cards.error_card(
-            "❌ العمل غير موجود", [f"العمل `{العمل}` غير موجود."], avatar_url=avatar), ephemeral=True)
+            "العمل غير موجود", [f"العمل `{العمل}` غير موجود."], avatar_url=avatar), ephemeral=True)
         return
 
     norm_specialty = map_type(التخصص)
@@ -410,7 +409,7 @@ async def set_work_specialty_price(interaction: discord.Interaction, العمل:
     await log_audit("تخصيص_سعر_عمل", interaction.user.id, None,
                     f"تخصيص سعر تخصص {norm_specialty} لعمل {العمل} -> {السعر}")
     await interaction.response.send_message(view=cards.success_card(
-        "✅ تم تخصيص السعر",
+        "تم تخصيص السعر",
         [f"التخصص **{norm_specialty.replace('_', ' ').title()}** في عمل «{العمل}» ← سعر خاص **{السعر}**.",
          "-# يسري هذا السعر على هذا العمل فقط."],
         avatar_url=avatar), ephemeral=True)
@@ -430,12 +429,12 @@ async def remove_work_specialty_prices(interaction: discord.Interaction, الع�
     target = next((w for w in works if w["name"] == العمل), None)
     if not target:
         await interaction.response.send_message(view=cards.error_card(
-            "❌ العمل غير موجود", [f"العمل `{العمل}` غير موجود."], avatar_url=avatar), ephemeral=True)
+            "العمل غير موجود", [f"العمل `{العمل}` غير موجود."], avatar_url=avatar), ephemeral=True)
         return
 
     if "custom_prices" not in target:
         await interaction.response.send_message(view=cards.info_card(
-            "ℹ️ لا تخصيصات", [f"العمل `{العمل}` ليس له تخصيصات سعرية أصلاً."], avatar_url=avatar), ephemeral=True)
+            "لا تخصيصات", [f"العمل `{العمل}` ليس له تخصيصات سعرية أصلاً."], avatar_url=avatar), ephemeral=True)
         return
 
     del target["custom_prices"]
@@ -444,7 +443,7 @@ async def remove_work_specialty_prices(interaction: discord.Interaction, الع�
     await log_audit("الغاء_تخصيص_عمل", interaction.user.id, None,
                     f"إزالة كل التخصيصات السعرية من عمل {العمل}")
     await interaction.response.send_message(view=cards.success_card(
-        "✅ تم إلغاء التخصيصات",
+        "تم إلغاء التخصيصات",
         [f"أُزيلت جميع التخصيصات السعرية من «{العمل}» وسيعود إلى الأسعار العامة."],
         avatar_url=avatar), ephemeral=True)
 
@@ -462,19 +461,19 @@ async def show_work_specialties(interaction: discord.Interaction, العمل: st
     work = await get_work(العمل)
     if not work:
         await interaction.response.send_message(view=cards.error_card(
-            "❌ العمل غير موجود", [f"العمل `{العمل}` غير موجود."], avatar_url=avatar), ephemeral=True)
+            "العمل غير موجود", [f"العمل `{العمل}` غير موجود."], avatar_url=avatar), ephemeral=True)
         return
 
     custom = work.get("custom_prices")
     if not custom:
         await interaction.response.send_message(view=cards.info_card(
-            "ℹ️ لا تخصيصات", [f"العمل `{العمل}` يخضع للأسعار العامة وليس له تخصيصات خاصة."],
+            "لا تخصيصات", [f"العمل `{العمل}` يخضع للأسعار العامة وليس له تخصيصات خاصة."],
             avatar_url=avatar), ephemeral=True)
         return
 
     bullets = "\n".join(f"• **{spec.replace('_', ' ').title()}** — {price}" for spec, price in custom.items())
     children = [
-        cards.header([f"## 📌 تخصيصات عمل «{cards.clamp(العمل, 60)}»", f"**{len(custom)}** تخصصات بسعر خاص."], avatar),
+        cards.header([f"## تخصيصات عمل «{cards.clamp(العمل, 60)}»", f"**{len(custom)}** تخصصات بسعر خاص."], avatar),
         cards.sep(2),
         cards.text(bullets),
         cards.sep(),
@@ -498,18 +497,18 @@ async def move_specialty_to_work(interaction: discord.Interaction, العمل: s
     specialties = SETTINGS.get("specialties", {})
     if norm_specialty not in specialties:
         await interaction.response.send_message(view=cards.error_card(
-            "❌ التخصص غير موجود", [f"التخصص `{التخصص}` غير موجود في التخصصات العامة."], avatar_url=avatar), ephemeral=True)
+            "التخصص غير موجود", [f"التخصص `{التخصص}` غير موجود في التخصصات العامة."], avatar_url=avatar), ephemeral=True)
         return
     if not specialties[norm_specialty].get("active", True):
         await interaction.response.send_message(view=cards.error_card(
-            "❌ التخصص معطّل", [f"التخصص `{التخصص}` معطّل حالياً في القائمة العامة."], avatar_url=avatar), ephemeral=True)
+            "التخصص معطّل", [f"التخصص `{التخصص}` معطّل حالياً في القائمة العامة."], avatar_url=avatar), ephemeral=True)
         return
 
     works = await load_works()
     target_work = next((w for w in works if w["name"] == العمل), None)
     if not target_work:
         await interaction.response.send_message(view=cards.error_card(
-            "❌ العمل غير موجود", [f"العمل `{العمل}` غير موجود."], avatar_url=avatar), ephemeral=True)
+            "العمل غير موجود", [f"العمل `{العمل}` غير موجود."], avatar_url=avatar), ephemeral=True)
         return
 
     current_price = specialties[norm_specialty]["price"]
@@ -525,7 +524,7 @@ async def move_specialty_to_work(interaction: discord.Interaction, العمل: s
     await log_audit("نقل_تخصص_للخاص", interaction.user.id, None,
                     f"نقل تخصص {norm_specialty} من العامة إلى عمل {العمل} بسعر {current_price}")
     await interaction.response.send_message(view=cards.success_card(
-        "✅ تم نقل التخصص",
+        "تم نقل التخصص",
         [f"انتقل **{norm_specialty.replace('_', ' ').title()}** من العامة إلى «{العمل}».",
          f"السعر المخصص: **{current_price}** (نفس السعر العام السابق)."],
         avatar_url=avatar), ephemeral=True)
@@ -547,13 +546,13 @@ async def move_specialty_to_global(interaction: discord.Interaction, العمل:
     target_work = next((w for w in works if w["name"] == العمل), None)
     if not target_work:
         await interaction.response.send_message(view=cards.error_card(
-            "❌ العمل غير موجود", [f"العمل `{العمل}` غير موجود."], avatar_url=avatar), ephemeral=True)
+            "العمل غير موجود", [f"العمل `{العمل}` غير موجود."], avatar_url=avatar), ephemeral=True)
         return
 
     custom = target_work.get("custom_prices")
     if not custom or norm_specialty not in custom:
         await interaction.response.send_message(view=cards.error_card(
-            "❌ التخصص غير موجود",
+            "التخصص غير موجود",
             [f"التخصص `{norm_specialty}` غير موجود ضمن تخصيصات العمل `{العمل}`."], avatar_url=avatar), ephemeral=True)
         return
 
@@ -575,7 +574,7 @@ async def move_specialty_to_global(interaction: discord.Interaction, العمل:
     await log_audit("نقل_تخصص_للعام", interaction.user.id, None,
                     f"نقل تخصص {norm_specialty} من عمل {العمل} إلى العامة بسعر {price}")
     await interaction.response.send_message(view=cards.success_card(
-        "✅ تم نقل التخصص",
+        "تم نقل التخصص",
         [f"انتقل **{norm_specialty.replace('_', ' ').title()}** من «{العمل}» إلى التخصصات العامة.",
          f"السعر العام الآن: **{price}**"],
         avatar_url=avatar), ephemeral=True)
@@ -596,7 +595,7 @@ async def add_specialty(interaction: discord.Interaction, الاسم: str, ال�
     norm_name = map_type(الاسم)
     if norm_name in SETTINGS.get("specialties", {}):
         await interaction.response.send_message(view=cards.error_card(
-            "❌ التخصص موجود مسبقاً", [f"التخصص `{norm_name}` موجود بالفعل."], avatar_url=avatar), ephemeral=True)
+            "التخصص موجود مسبقاً", [f"التخصص `{norm_name}` موجود بالفعل."], avatar_url=avatar), ephemeral=True)
         return
     SETTINGS["specialties"][norm_name] = {
         "price": السعر,
@@ -607,8 +606,8 @@ async def add_specialty(interaction: discord.Interaction, الاسم: str, ال�
     rebuild_prices()
     await log_audit("اضافة_تخصص", interaction.user.id, None, f"أضاف تخصص {norm_name} بسعر {السعر}")
     await interaction.response.send_message(view=cards.success_card(
-        "✅ تم إضافة التخصص",
-        [f"**{norm_name.replace('_', ' ').title()}** — السعر: **{السعر}** — الحالة: {'نشط ✅' if نشط else 'معطل ⊘'}"],
+        "تم إضافة التخصص",
+        [f"**{norm_name.replace('_', ' ').title()}** — السعر: **{السعر}** — الحالة: {'نشط' if نشط else 'معطل'}"],
         avatar_url=avatar), ephemeral=True)
 
 
@@ -624,14 +623,14 @@ async def delete_specialty(interaction: discord.Interaction, الاسم: str):
     norm_name = map_type(الاسم)
     if norm_name not in SETTINGS.get("specialties", {}):
         await interaction.response.send_message(view=cards.error_card(
-            "❌ التخصص غير موجود", [f"التخصص `{الاسم}` غير موجود."], avatar_url=avatar), ephemeral=True)
+            "التخصص غير موجود", [f"التخصص `{الاسم}` غير موجود."], avatar_url=avatar), ephemeral=True)
         return
     SETTINGS["specialties"][norm_name]["active"] = False
     await save_settings(SETTINGS)
     rebuild_prices()
     await log_audit("حذف_تخصص", interaction.user.id, None, f"عطّل تخصص {norm_name}")
     await interaction.response.send_message(view=cards.success_card(
-        "✅ تم تعطيل التخصص",
+        "تم تعطيل التخصص",
         [f"التخصص **{norm_name.replace('_', ' ').title()}** معطّل الآن ولن يظهر في أوامر التسجيل."],
         avatar_url=avatar), ephemeral=True)
 
@@ -649,13 +648,13 @@ async def activate_specialty(interaction: discord.Interaction, الاسم: str):
     specialties = SETTINGS.get("specialties", {})
     if norm_name not in specialties:
         await interaction.response.send_message(view=cards.error_card(
-            "❌ التخصص غير موجود", [f"التخصص `{الاسم}` غير موجود."], avatar_url=avatar), ephemeral=True)
+            "التخصص غير موجود", [f"التخصص `{الاسم}` غير موجود."], avatar_url=avatar), ephemeral=True)
         return
     specialties[norm_name]["active"] = True
     await save_settings(SETTINGS)
     rebuild_prices()
     await interaction.response.send_message(view=cards.success_card(
-        "✅ تم تفعيل التخصص",
+        "تم تفعيل التخصص",
         [f"التخصص **{norm_name.replace('_', ' ').title()}** مفعّل الآن."],
         avatar_url=avatar), ephemeral=True)
 
@@ -673,13 +672,13 @@ async def deactivate_specialty(interaction: discord.Interaction, الاسم: str
     specialties = SETTINGS.get("specialties", {})
     if norm_name not in specialties:
         await interaction.response.send_message(view=cards.error_card(
-            "❌ التخصص غير موجود", [f"التخصص `{الاسم}` غير موجود."], avatar_url=avatar), ephemeral=True)
+            "التخصص غير موجود", [f"التخصص `{الاسم}` غير موجود."], avatar_url=avatar), ephemeral=True)
         return
     specialties[norm_name]["active"] = False
     await save_settings(SETTINGS)
     rebuild_prices()
     await interaction.response.send_message(view=cards.success_card(
-        "✅ تم تعطيل التخصص",
+        "تم تعطيل التخصص",
         [f"التخصص **{norm_name.replace('_', ' ').title()}** معطّل الآن."],
         avatar_url=avatar), ephemeral=True)
 
@@ -698,7 +697,7 @@ async def add_bonus(interaction: discord.Interaction, عضو: discord.Member, ا
         return
     if المبلغ <= 0:
         await interaction.response.send_message(view=cards.error_card(
-            "❌ مبلغ غير صالح", ["المبلغ يجب أن يكون أكبر من صفر."], avatar_url=avatar), ephemeral=True)
+            "مبلغ غير صالح", ["المبلغ يجب أن يكون أكبر من صفر."], avatar_url=avatar), ephemeral=True)
         return
 
     records = await load_records()
@@ -721,13 +720,12 @@ async def add_bonus(interaction: discord.Interaction, عضو: discord.Member, ا
     await update_stats()
 
     currency = SETTINGS.get('currency', '$') or '$'
-    lines = [f"**👤 العضو:** {عضو.mention}",
-             f"**💰 المبلغ:** {currency}{abs(المبلغ):.2f}"]
+    lines = [f"**💰 المبلغ:** {currency}{abs(المبلغ):.2f}"]
     if السبب:
-        lines.append(f"**📝 السبب:** {السبب}")
-    lines.append(f"**🛡️ أضيفت بواسطة:** {interaction.user.mention}")
+        lines.append(f"**السبب:** {السبب}")
+    lines.append(f"**أضيفت بواسطة:** {interaction.user.mention}")
     children = [
-        cards.header(["## 🎁 تمت إضافة المكافأة", f"<@{عضو.id}>"], _member_avatar(عضو)),
+        cards.header(["## تمت إضافة المكافأة", f"<@{عضو.id}>"], _member_avatar(عضو)),
         cards.sep(2),
         cards.text("\n".join(lines)),
         cards.sep(),
@@ -737,7 +735,7 @@ async def add_bonus(interaction: discord.Interaction, عضو: discord.Member, ا
 
     await log_audit("مكافأة", interaction.user.id, عضو.id, f"مكافأة {abs(المبلغ):.2f} - السبب: {السبب or 'غير محدد'}")
     try:
-        await عضو.send(f"🎁 لقد تلقيت مكافأة بقيمة {currency}{abs(المبلغ):.2f} من {interaction.user.mention}.\nالسبب: {السبب or 'غير محدد'}")
+        await عضو.send(f"لقد تلقيت مكافأة بقيمة {currency}{abs(المبلغ):.2f} من {interaction.user.mention}.\nالسبب: {السبب or 'غير محدد'}")
     except:
         pass
 
@@ -753,7 +751,7 @@ async def add_deduction(interaction: discord.Interaction, عضو: discord.Member
         return
     if المبلغ <= 0:
         await interaction.response.send_message(view=cards.error_card(
-            "❌ مبلغ غير صالح", ["المبلغ يجب أن يكون أكبر من صفر."], avatar_url=avatar), ephemeral=True)
+            "مبلغ غير صالح", ["المبلغ يجب أن يكون أكبر من صفر."], avatar_url=avatar), ephemeral=True)
         return
 
     records = await load_records()
@@ -776,13 +774,12 @@ async def add_deduction(interaction: discord.Interaction, عضو: discord.Member
     await update_stats()
 
     currency = SETTINGS.get('currency', '$') or '$'
-    lines = [f"**👤 العضو:** {عضو.mention}",
-             f"**💸 المبلغ المخصوم:** {currency}{abs(المبلغ):.2f}"]
+    lines = [f"**💰 المبلغ المخصوم:** {currency}{abs(المبلغ):.2f}"]
     if السبب:
-        lines.append(f"**📝 السبب:** {السبب}")
-    lines.append(f"**🛡️ أضيف بواسطة:** {interaction.user.mention}")
+        lines.append(f"**السبب:** {السبب}")
+    lines.append(f"**أضيف بواسطة:** {interaction.user.mention}")
     children = [
-        cards.header(["## 🔻 تم الخصم", f"<@{عضو.id}>"], _member_avatar(عضو)),
+        cards.header(["## تم الخصم", f"<@{عضو.id}>"], _member_avatar(عضو)),
         cards.sep(2),
         cards.text("\n".join(lines)),
         cards.sep(),
@@ -792,7 +789,7 @@ async def add_deduction(interaction: discord.Interaction, عضو: discord.Member
 
     await log_audit("خصم", interaction.user.id, عضو.id, f"خصم {abs(المبلغ):.2f} - السبب: {السبب or 'غير محدد'}")
     try:
-        await عضو.send(f"🔻 تم خصم مبلغ {currency}{abs(المبلغ):.2f} من رصيدك بواسطة {interaction.user.mention}.\nالسبب: {السبب or 'غير محدد'}")
+        await عضو.send(f"تم خصم مبلغ {currency}{abs(المبلغ):.2f} من رصيدك بواسطة {interaction.user.mention}.\nالسبب: {السبب or 'غير محدد'}")
     except:
         pass
 
@@ -809,7 +806,7 @@ async def delete_bonus_deduction(interaction: discord.Interaction, عضو: disco
     user_id = str(عضو.id)
     if user_id not in records:
         await interaction.response.send_message(view=cards.error_card(
-            "❌ لا توجد سجلات", [f"لا يوجد سجلات للعضو {عضو.mention}."], avatar_url=avatar), ephemeral=True)
+            "لا توجد سجلات", [f"لا يوجد سجلات للعضو {عضو.mention}."], avatar_url=avatar), ephemeral=True)
         return
 
     all_entries = records[user_id]
@@ -818,7 +815,7 @@ async def delete_bonus_deduction(interaction: discord.Interaction, عضو: disco
     recent = bonus_ded_entries[:10]
     if not recent:
         await interaction.response.send_message(view=cards.error_card(
-            "❌ لا توجد عمليات", [f"لا يوجد عمليات مكافأة أو خصم للعضو {عضو.mention}."], avatar_url=avatar), ephemeral=True)
+            "لا توجد عمليات", [f"لا يوجد عمليات مكافأة أو خصم للعضو {عضو.mention}."], avatar_url=avatar), ephemeral=True)
         return
 
     options = []
@@ -843,7 +840,7 @@ class BonusDeletePanel(ui.LayoutView):
     def rebuild(self):
         self.clear_items()
         children: list = [
-            cards.header(["## ⚖️ عمليات المكافآت والخصومات", f"**{self.member.mention}** — أحدث 10 عمليات."],
+            cards.header(["## عمليات المكافآت والخصومات", f"{self.member.mention} — أحدث 10 عمليات."],
                          _member_avatar(self.member)),
             cards.sep(2),
             cards.make_select("اختر العملية للحذف...", self.options, self.select_callback),
@@ -856,7 +853,7 @@ class BonusDeletePanel(ui.LayoutView):
         value = interaction.data['values'][0]
         if value == "cancel":
             await interaction.response.edit_message(view=cards.muted_card(
-                "🚫 أُلغيت العملية", ["لم يُحذف أي شيء."], avatar_url=_bot_avatar()))
+                "أُلغيت العملية", ["لم يُحذف أي شيء."], avatar_url=_bot_avatar()))
             return
         idx = int(value)
         entry_to_delete = self.recent[idx]
@@ -879,16 +876,16 @@ class BonusDeletePanel(ui.LayoutView):
                     await log_audit("حذف_مكافأة_خصم", interaction.user.id, self.member.id,
                                     f"حذف {entry_to_delete.get('work_type')} {abs(entry_to_delete.get('total',0)):.2f}")
                     await update_stats()
-                    await _finish(interaction2, "✅ تم حذف العملية",
+                    await _finish(interaction2, "تم حذف العملية",
                                   [f"حُذفت عملية **{entry_to_delete.get('work_type')}** بمبلغ "
                                    f"{abs(entry_to_delete.get('total',0)):.2f}."])
                 else:
-                    await _finish(interaction2, "❌ لم يتم العثور على العملية",
+                    await _finish(interaction2, "لم يتم العثور على العملية",
                                   ["لم يتم العثور على العملية — ربما حُذفت للتو."], gray=True)
             else:
-                await _finish(interaction2, "❌ لا توجد سجلات", ["لا توجد سجلات."], gray=True)
+                await _finish(interaction2, "لا توجد سجلات", ["لا توجد سجلات."], gray=True)
 
-        await _confirm_card(interaction, "⚠️ تأكيد الحذف",
+        await _confirm_card(interaction, "تأكيد الحذف",
                             f"تأكيد حذف **{entry_to_delete.get('work_type')}** بمبلغ "
                             f"{abs(entry_to_delete.get('total',0)):.2f}؟", confirm)
 
@@ -907,11 +904,11 @@ async def set_payment_day(interaction: discord.Interaction, اليوم: int, ا�
         return
     if not (1 <= اليوم <= 28):
         await interaction.response.send_message(view=cards.error_card(
-            "❌ يوم غير صالح", ["اليوم يجب أن يكون بين 1 و 28."], avatar_url=avatar), ephemeral=True)
+            "يوم غير صالح", ["اليوم يجب أن يكون بين 1 و 28."], avatar_url=avatar), ephemeral=True)
         return
     if not (0 <= الساعة <= 23):
         await interaction.response.send_message(view=cards.error_card(
-            "❌ ساعة غير صالحة", ["الساعة يجب أن تكون بين 0 و 23."], avatar_url=avatar), ephemeral=True)
+            "ساعة غير صالحة", ["الساعة يجب أن تكون بين 0 و 23."], avatar_url=avatar), ephemeral=True)
         return
     SETTINGS["payment_day"] = اليوم
     SETTINGS["payment_hour"] = الساعة
@@ -919,7 +916,7 @@ async def set_payment_day(interaction: discord.Interaction, اليوم: int, ا�
     SETTINGS["payment_day_sent"] = False
     await save_settings(SETTINGS)
     await interaction.response.send_message(view=cards.success_card(
-        "✅ تم تعيين موعد الدفع",
+        "تم تعيين موعد الدفع",
         [f"موعد الدفع الشهري: **يوم {اليوم} الساعة {الساعة}:00**.",
          "-# ستصلا بطاقة تذكير قبل الموعد بـ 24 ساعة ثم في يومه."],
         avatar_url=avatar), ephemeral=True)
@@ -943,7 +940,7 @@ class PaymentReportPaginator(ui.LayoutView):
         self.clear_items()
         avatar = _bot_avatar()
         children: list = [
-            cards.header(["## 📅 تقرير الدفع الشهري", self._summary_line()], avatar),
+            cards.header(["## تقرير الدفع الشهري", self._summary_lines()], avatar),
             cards.sep(2),
         ]
         start = self.current_page * self.per_page
@@ -951,12 +948,12 @@ class PaymentReportPaginator(ui.LayoutView):
         blocks = []
         for index, row in enumerate(page_rows, start + 1):
             works_preview = "، ".join(f"{name} ({count})" for name, count in row["works"][:4]) or "لا توجد أعمال"
+            # المنشن الحقيقي فقط — بلا تكرار للاسم فوقه
             blocks.append(
-                f"**{index}. {row['name']}**\n"
-                f"{row['mention']}\n"
-                f"-# 📑 الفصول: **{row['chapters']}** | 🎁 المكافآت: {self.currency}{row['bonuses']:.2f} | 🔻 الخصومات: {self.currency}{row['deductions']:.2f}\n"
-                f"-# 💵 الصافي المستحق: **{self.currency}{row['total']:.2f}**\n"
-                f"-# 📚 الأعمال: {works_preview}"
+                f"{cards.rank_prefix(index)} {row['mention']}\n"
+                f"-# {row['chapters']} فصل • 💰 {self.currency}{row['total']:.2f}\n"
+                f"-# مكافآت {self.currency}{row['bonuses']:.2f} • خصومات {self.currency}{row['deductions']:.2f}\n"
+                f"-# الأعمال: {works_preview}"
             )
         children.append(cards.text(cards.clamp("\n\n".join(blocks), 3200)))
         footnote = "مرتّب حسب صافي المستحق • الأعمال المعزولة مستبعدة."
@@ -965,7 +962,7 @@ class PaymentReportPaginator(ui.LayoutView):
             children += [cards.sep(), cards.pager_row(self.current_page, self.total_pages,
                                                       self.previous_page, self.next_page)]
         children += [cards.sep(), cards.row(
-            cards.success_btn("📥 تصدير Excel", self.export_excel)
+            cards.secondary_btn("تصدير Excel", self.export_excel)
         )]
         if self.back is not None:
             children += [cards.sep(), cards.row(cards.secondary_btn("عودة إلى لوحة التحكم", self._back_cb, emoji="↩"))]
@@ -984,10 +981,12 @@ class PaymentReportPaginator(ui.LayoutView):
             return
         await interaction.response.edit_message(view=parent)
 
-    def _summary_line(self) -> str:
+    def _summary_lines(self) -> str:
         grand_total = sum(row["total"] for row in self.rows)
         total_chapters = sum(row["chapters"] for row in self.rows)
-        return f"**الأعضاء:** {len(self.rows)} • **الفصول:** {total_chapters} • **الإجمالي:** {self.currency}{grand_total:.2f}"
+        return (f"**الأعضاء:** {len(self.rows)}\n"
+                f"**الفصول:** {total_chapters}\n"
+                f"**💰 الإجمالي:** {self.currency}{grand_total:.2f}")
 
     async def refresh(self, interaction: discord.Interaction):
         self.rebuild()
@@ -1035,7 +1034,7 @@ async def payment_report(interaction: discord.Interaction):
     rows, details = await build_payment_rows(interaction.guild)
     if not rows:
         await interaction.response.send_message(view=cards.info_card(
-            "📭 لا توجد سجلات", ["لا توجد أي سجلات لهذا الشهر."], avatar_url=_bot_avatar()), ephemeral=True)
+            "لا توجد سجلات", ["لا توجد أي سجلات لهذا الشهر."], avatar_url=_bot_avatar()), ephemeral=True)
         return
 
     view = PaymentReportPaginator(rows, details, interaction.guild, SETTINGS.get('currency', '$'))
@@ -1056,7 +1055,7 @@ async def monthly_summary(interaction: discord.Interaction):
     user_id = str(interaction.user.id)
     if user_id not in records:
         await interaction.response.send_message(view=cards.info_card(
-            "📭 ليس لديك أي شغل", ["لم تسجل أي فصول بعد — ابدأ بأمر /تسجيل."],
+            "ليس لديك أي شغل", ["لم تسجل أي فصول بعد — ابدأ بأمر /تسجيل."],
             avatar_url=_member_avatar(interaction.user)), ephemeral=True)
         return
     month_start = datetime.utcnow().replace(day=1)
@@ -1069,7 +1068,7 @@ async def monthly_summary(interaction: discord.Interaction):
             pass
     if not month_entries:
         await interaction.response.send_message(view=cards.info_card(
-            "📭 لا يوجد عمل هذا الشهر", ["لم تقم بأي عمل هذا الشهر."],
+            "لا يوجد عمل هذا الشهر", ["لم تقم بأي عمل هذا الشهر."],
             avatar_url=_member_avatar(interaction.user)), ephemeral=True)
         return
     # نفس البطاقة المستخدمة في زر «ملخص شهري» بلوحة التحكم — تصميم واحد لا يتغير
@@ -1104,7 +1103,7 @@ async def update_prices(interaction: discord.Interaction, التخصص: str = No
     target_specialty = map_type(التخصص) if التخصص else None
     if target_specialty and target_specialty not in specialties:
         await interaction.followup.send(view=cards.error_card(
-            "❌ التخصص غير موجود", [f"التخصص `{التخصص}` غير موجود."], avatar_url=avatar), ephemeral=True)
+            "التخصص غير موجود", [f"التخصص `{التخصص}` غير موجود."], avatar_url=avatar), ephemeral=True)
         return
     # Determine date range
     if كل_السجلات:
@@ -1116,7 +1115,7 @@ async def update_prices(interaction: discord.Interaction, التخصص: str = No
             date_to = datetime.fromisoformat(الى_تاريخ) if الى_تاريخ else datetime.max
         except:
             await interaction.followup.send(view=cards.error_card(
-                "❌ صيغة تاريخ غير صحيحة", ["استخدم صيغة YYYY-MM-DD."], avatar_url=avatar), ephemeral=True)
+                "صيغة تاريخ غير صحيحة", ["استخدم صيغة YYYY-MM-DD."], avatar_url=avatar), ephemeral=True)
             return
     else:
         # Default: current month
@@ -1152,7 +1151,7 @@ async def update_prices(interaction: discord.Interaction, التخصص: str = No
         f"✓ الفترة — {period_str}",
     ]
     children = [
-        cards.header(["## ✅ تم تحديث الأسعار", f"<@{interaction.user.id}>"], avatar),
+        cards.header(["## تم تحديث الأسعار", f"<@{interaction.user.id}>"], avatar),
         cards.sep(2),
         cards.text("\n".join(checklist)),
         cards.sep(),

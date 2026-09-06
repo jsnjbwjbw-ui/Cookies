@@ -46,9 +46,9 @@ async def on_command_error(ctx, error):
     if isinstance(error, commands.CheckFailure):
         return
     if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ ما عندك صلاحية تستخدم هذا الأمر.")
+        await ctx.send("ما عندك صلاحية تستخدم هذا الأمر.")
         return
-    await ctx.send(f"⚠️ صار خطأ: `{error}`")
+    await ctx.send(f"صار خطأ: `{error}`")
 
 
 @bot.event
@@ -85,12 +85,18 @@ async def on_ready():
 
 @bot.check
 async def only_allowed_channel(ctx):
+    """نفس منطق channel_allowed: المعرف الرقمي أو الاسم — لا مقارنة بالاسم وحده."""
     if ctx.author.bot:
         return False
-    if ctx.channel.name in SETTINGS.get("allowed_channels", []):
+    allowed = SETTINGS.get("allowed_channels", [])
+    if getattr(ctx.channel, "id", None) in allowed:
         return True
-    channels_str = ", ".join([f"#{ch}" for ch in SETTINGS.get("allowed_channels", [])])
-    await ctx.send(f"❌ استخدم أوامر البوت فقط في أحد الرومات: {channels_str}.")
+    if getattr(ctx.channel, "name", None) in allowed:
+        return True
+    channels_str = "، ".join(
+        f"<#{ch}>" if isinstance(ch, int) else f"#{ch}" for ch in allowed
+    )
+    await ctx.send(f"استخدم أوامر البوت فقط في أحد الرومات التالية:\n{channels_str}")
     return False
 
 
@@ -111,7 +117,7 @@ async def daily_backup():
     records = await load_records()
     data = json.dumps(records, ensure_ascii=False, indent=2)
     file = discord.File(BytesIO(data.encode('utf-8')), filename=f"backup_{datetime.utcnow().date()}.json")
-    await channel.send(f"📦 نسخة احتياطية يومية - {datetime.utcnow().date()}", file=file)
+    await channel.send(f"نسخة احتياطية يومية — {datetime.utcnow().date()}", file=file)
 
 
 @tasks.loop(hours=1)
@@ -182,13 +188,13 @@ async def send_payment_reminder(hours_before):
     currency = SETTINGS.get('currency', '$') or '$'
     avatar_url = bot.user.display_avatar.url if bot.user else None
 
-    title = "🔔 تذكير بموعد الدفع" if hours_before == 24 else "📅 اليوم هو موعد الدفع الشهري"
-    intro = ("⏰ تبقى 24 ساعة على موعد الدفع الشهري." if hours_before == 24
-             else "📅 اليوم هو موعد الدفع الشهري.")
+    title = "تذكير بموعد الدفع" if hours_before == 24 else "اليوم هو موعد الدفع الشهري"
+    intro = ("تبقى 24 ساعة على موعد الدفع الشهري." if hours_before == 24
+             else "اليوم هو موعد الدفع الشهري.")
 
     body_lines = [
         intro,
-        f"**إجمالي المبلغ المستحق:** {currency}{total_all:,.2f}",
+        f"**💰 إجمالي المبلغ المستحق:** {currency}{total_all:,.2f}",
     ]
     if totals:
         top5 = sorted(totals.items(), key=lambda x: x[1], reverse=True)[:5]

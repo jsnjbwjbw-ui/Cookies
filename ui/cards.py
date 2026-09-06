@@ -82,6 +82,11 @@ def progress_line(done: float, total: float) -> str:
     return f"{progress_bar(done, total)} **{int(done)} / {int(total)}**"
 
 
+def rank_prefix(rank: int) -> str:
+    """التاج للمركز الأول فقط — باقي المراكز أرقام صريحة بلا إيموجي."""
+    return "👑" if rank == 1 else f"**{rank}.**"
+
+
 # ───────────────────────────────────────────────────────────────
 # الحاوية الأساسية — Card (LayoutView بحاوية واحدة type 17)
 # ───────────────────────────────────────────────────────────────
@@ -217,8 +222,8 @@ def muted_card(title: str, lines: Iterable[str], *, avatar_url: Optional[str] = 
     return simple_card(ACCENT_GRAY, title, lines, avatar_url=avatar_url, signature=signature)
 
 
-# بطاقات الرفض القياسية — نفس نصوص بوت السحب حرفيًا
-PERMISSION_TITLE = "🔒 لا تملك صلاحية"
+# بطاقات الرفض القياسية — لون الحاوية الأحمر يوصل الرسالة بدل الإيموجي
+PERMISSION_TITLE = "لا تملك صلاحية"
 PERMISSION_DETAIL = "هذا الأمر متاح لأدوار محددة فقط."
 
 
@@ -227,11 +232,11 @@ def permission_card(avatar_url: Optional[str] = None) -> Card:
 
 
 def channel_card(allowed_channels: list, avatar_url: Optional[str] = None) -> Card:
-    channels_str = ", ".join(
-        f"<#{ch}>" if isinstance(ch, int) else f"#{ch}" for ch in allowed_channels
-    ) or "لا توجد قنوات محددة"
+    channels_str = "\n".join(
+        f"• <#{ch}>" if isinstance(ch, int) else f"• #{ch}" for ch in allowed_channels
+    ) or "• لا توجد قنوات محددة"
     return error_card(
-        "🔒 القناة غير مسموحة",
-        [f"استخدم هذا الأمر فقط في أحد الرومات: {channels_str}."],
+        "القناة غير مسموحة",
+        ["استخدم هذا الأمر فقط في أحد الرومات التالية:", channels_str],
         avatar_url=avatar_url,
     )

@@ -57,7 +57,7 @@ async def send_confirm_card(
 
 async def _cancel_action(interaction: discord.Interaction):
     await interaction.response.edit_message(view=cards.muted_card(
-        "🚫 أُلغيت العملية",
+        "أُلغيت العملية",
         ["لم يُحذف أي شيء."],
         avatar_url=_bot_avatar(interaction.client)))
 
@@ -94,7 +94,7 @@ class DeletePanel(ui.LayoutView):
         label_line = (f"**{self.member.mention}** — عمل «{cards.clamp(self.work_name, 60)}»"
                       if self.work_name else f"**{self.member.mention}**")
         children: list = [
-            cards.header(["## 🗑️ خيارات الحذف", label_line], _member_avatar(self.member)),
+            cards.header(["## خيارات الحذف", label_line], _member_avatar(self.member)),
             cards.sep(2),
             cards.make_select("اختر إجراء...", options, self.select_callback),
             cards.sep(),
@@ -106,7 +106,7 @@ class DeletePanel(ui.LayoutView):
         value = interaction.data['values'][0]
         if value == "cancel":
             await interaction.response.edit_message(view=cards.muted_card(
-                "🚫 أُلغيت العملية", ["لم يُحذف أي شيء."], avatar_url=_bot_avatar(interaction.client)))
+                "أُلغيت العملية", ["لم يُحذف أي شيء."], avatar_url=_bot_avatar(interaction.client)))
             return
 
         if value == "delete_all_user":
@@ -117,13 +117,13 @@ class DeletePanel(ui.LayoutView):
                     await save_records(records)
                     await log_audit("حذف_كل_سجلات_العضو", interaction.user.id, self.member.id, "حذف كل السجلات")
                     await update_stats()
-                    await finish_card(interaction2, "✅ تم حذف كل سجلات العضو",
+                    await finish_card(interaction2, "تم حذف كل سجلات العضو",
                                       [f"**العضو:** {self.member.mention}", "لم يتبقَّ أي سجل له."])
                 else:
-                    await finish_card(interaction2, "❌ لا توجد سجلات",
+                    await finish_card(interaction2, "لا توجد سجلات",
                                       [f"لا توجد سجلات للعضو {self.member.mention}."], green=False)
             await send_confirm_card(
-                interaction, "⚠️ تأكيد حذف السجلات",
+                interaction, "تأكيد حذف السجلات",
                 f"هل أنت متأكد من حذف **كل** سجلات {self.member.mention}؟ لا يمكن التراجع.",
                 confirm)
             return
@@ -142,14 +142,14 @@ class DeletePanel(ui.LayoutView):
                     await log_audit("حذف_عمل_كامل", interaction.user.id, self.member.id,
                                     f"حذف عمل {self.work_name} ({removed_count} فصل)")
                     await update_stats()
-                    await finish_card(interaction2, "✅ تم حذف العمل",
+                    await finish_card(interaction2, "تم حذف العمل",
                                       [f"حُذف عمل «{self.work_name}» بالكامل — **{removed_count}** فصل.",
                                        f"**العضو:** {self.member.mention}"])
                 else:
-                    await finish_card(interaction2, "❌ لا توجد سجلات",
+                    await finish_card(interaction2, "لا توجد سجلات",
                                       [f"لا توجد سجلات للعضو {self.member.mention}."], green=False)
             await send_confirm_card(
-                interaction, "⚠️ تأكيد حذف العمل",
+                interaction, "تأكيد حذف العمل",
                 f"هل أنت متأكد من حذف كل فصول عمل «{self.work_name}» للعضو {self.member.mention}؟",
                 confirm)
             return
@@ -159,13 +159,13 @@ class DeletePanel(ui.LayoutView):
             user_id_str = str(self.member.id)
             if user_id_str not in records:
                 await interaction.response.send_message(
-                    view=cards.error_card("❌ لا توجد سجلات", [f"لا توجد سجلات للعضو {self.member.mention}."]),
+                    view=cards.error_card("لا توجد سجلات", [f"لا توجد سجلات للعضو {self.member.mention}."]),
                     ephemeral=True)
                 return
             work_entries = [e for e in records[user_id_str] if e.get("work_name") == self.work_name]
             if not work_entries:
                 await interaction.response.send_message(
-                    view=cards.error_card("❌ لا توجد فصول", ["لا توجد فصول لهذا العمل."]),
+                    view=cards.error_card("لا توجد فصول", ["لا توجد فصول لهذا العمل."]),
                     ephemeral=True)
                 return
             options = []
@@ -193,7 +193,7 @@ class ChapterDeletePanel(ui.LayoutView):
     def rebuild(self):
         self.clear_items()
         children: list = [
-            cards.header(["## 🔍 حذف فصل محدد",
+            cards.header(["## حذف فصل محدد",
                           f"**{self.member.mention}** — عمل «{cards.clamp(self.work_name, 60)}»"], _member_avatar(self.member)),
             cards.sep(2),
             cards.make_select("اختر الفصل المراد حذفه...", self.options, self.select_callback),
@@ -206,7 +206,7 @@ class ChapterDeletePanel(ui.LayoutView):
         chapter = interaction.data['values'][0]
         if chapter == "cancel":
             await interaction.response.edit_message(view=cards.muted_card(
-                "🚫 أُلغيت العملية", ["لم يُحذف أي شيء."], avatar_url=_bot_avatar(interaction.client)))
+                "أُلغيت العملية", ["لم يُحذف أي شيء."], avatar_url=_bot_avatar(interaction.client)))
             return
 
         async def confirm(interaction2: discord.Interaction):
@@ -223,14 +223,14 @@ class ChapterDeletePanel(ui.LayoutView):
                 await log_audit("حذف_فصل", interaction.user.id, self.member.id,
                                 f"حذف فصل {chapter} من عمل {self.work_name}")
                 await update_stats()
-                await finish_card(interaction2, "✅ تم حذف الفصل",
+                await finish_card(interaction2, "تم حذف الفصل",
                                   [f"حُذف **فصل {chapter}** من عمل «{self.work_name}».",
                                    f"**العضو:** {self.member.mention}"])
             else:
-                await finish_card(interaction2, "❌ لا توجد سجلات",
+                await finish_card(interaction2, "لا توجد سجلات",
                                   [f"لا توجد سجلات للعضو {self.member.mention}."], green=False)
         await send_confirm_card(
-            interaction, "⚠️ تأكيد حذف الفصل",
+            interaction, "تأكيد حذف الفصل",
             f"هل أنت متأكد من حذف **فصل {chapter}** من عمل «{self.work_name}»؟",
             confirm)
 
@@ -253,14 +253,14 @@ async def delete_advanced(interaction: discord.Interaction, member: discord.Memb
     user_id_str = str(member.id)
     if user_id_str not in records or not records[user_id_str]:
         await interaction.response.send_message(view=cards.error_card(
-            "❌ لا توجد سجلات", [f"العضو {member.mention} ما عنده أي شغل محفوظ."],
+            "لا توجد سجلات", [f"العضو {member.mention} ما عنده أي شغل محفوظ."],
             avatar_url=_member_avatar(member)), ephemeral=True)
         return
     if work_name:
         work_exists = any(e.get("work_name") == work_name for e in records[user_id_str])
         if not work_exists:
             await interaction.response.send_message(view=cards.error_card(
-                "❌ العمل غير موجود", [f"لا يوجد عمل باسم `{work_name}` لهذا العضو."]), ephemeral=True)
+                "العمل غير موجود", [f"لا يوجد عمل باسم `{work_name}` لهذا العضو."]), ephemeral=True)
             return
         await interaction.response.send_message(view=DeletePanel(interaction.user, member, work_name))
     else:
@@ -283,7 +283,7 @@ class WorkPickPanel(ui.LayoutView):
     def rebuild(self):
         self.clear_items()
         children: list = [
-            cards.header(["## 🗑️ اختر العمل أو الإجراء", f"**{self.member.mention}**"], _member_avatar(self.member)),
+            cards.header(["## اختر العمل أو الإجراء", f"**{self.member.mention}**"], _member_avatar(self.member)),
             cards.sep(2),
             cards.make_select("اختر عملاً أو خياراً...", self._options(), self.select_callback),
             cards.sep(),
@@ -301,7 +301,7 @@ class WorkPickPanel(ui.LayoutView):
         value = interaction.data['values'][0]
         if value == "cancel":
             await interaction.response.edit_message(view=cards.muted_card(
-                "🚫 أُلغيت العملية", ["لم يُحذف أي شيء."], avatar_url=_bot_avatar(interaction.client)))
+                "أُلغيت العملية", ["لم يُحذف أي شيء."], avatar_url=_bot_avatar(interaction.client)))
             return
         if value == "delete_all_user":
             async def confirm(interaction2: discord.Interaction):
@@ -311,13 +311,13 @@ class WorkPickPanel(ui.LayoutView):
                     await save_records(records2)
                     await log_audit("حذف_كل_سجلات_العضو", interaction.user.id, self.member.id, "حذف كل السجلات")
                     await update_stats()
-                    await finish_card(interaction2, "✅ تم حذف كل سجلات العضو",
+                    await finish_card(interaction2, "تم حذف كل سجلات العضو",
                                       [f"**العضو:** {self.member.mention}", "لم يتبقَّ أي سجل له."])
                 else:
-                    await finish_card(interaction2, "❌ لا توجد سجلات",
+                    await finish_card(interaction2, "لا توجد سجلات",
                                       [f"لا توجد سجلات للعضو {self.member.mention}."], green=False)
             await send_confirm_card(
-                interaction, "⚠️ تأكيد حذف السجلات",
+                interaction, "تأكيد حذف السجلات",
                 f"هل أنت متأكد من حذف **كل** سجلات {self.member.mention}؟ لا يمكن التراجع.",
                 confirm)
             return
@@ -335,10 +335,10 @@ async def delete_work_text(ctx, member: discord.Member = None, number: int = Non
     records = await load_records()
     user_id = str(member.id)
     if user_id not in records or not records[user_id]:
-        await ctx.send("❌ هذا العضو ما عنده أي شغل محفوظ.")
+        await ctx.send("هذا العضو ما عنده أي شغل محفوظ.")
         return
     if number < 1 or number > len(records[user_id]):
-        await ctx.send("❌ رقم السجل غير صحيح.")
+        await ctx.send("رقم السجل غير صحيح.")
         return
     deleted = records[user_id].pop(number - 1)
     if not records[user_id]:
@@ -349,12 +349,12 @@ async def delete_work_text(ctx, member: discord.Member = None, number: int = Non
     avatar = ctx.bot.user.display_avatar.url if ctx.bot.user else None
     currency = SETTINGS.get('currency', '$') or '$'
     children: list = [
-        cards.header(["## 🗑️ تم حذف السجل", f"**{member.mention}**"], avatar),
+        cards.header(["## تم حذف السجل", f"**{member.mention}**"], avatar),
         cards.sep(2),
         cards.text(
-            f"**📖 العمل:** {deleted.get('work_name', 'غير محدد')}\n"
-            f"**📑 الفصل:** {deleted.get('chapter', 'غير محدد')}\n"
-            f"**🛠️ التخصص:** {deleted.get('work_type', 'غير محدد')}\n"
+            f"**العمل:** {deleted.get('work_name', 'غير محدد')}\n"
+            f"**الفصل:** {deleted.get('chapter', 'غير محدد')}\n"
+            f"**التخصص:** {deleted.get('work_type', 'غير محدد')}\n"
             f"**💰 المبلغ:** {currency}{deleted.get('total', 0):.2f}"
         ),
         cards.sep(),
@@ -385,7 +385,7 @@ async def _delete_all_core(responder, user: discord.abc.User, avatar):
 
     if total_removed == 0:
         await responder(cards.error_card(
-            "📭 لا يوجد ما يُحذف",
+            "لا يوجد ما يُحذف",
             ["لا توجد سجلات قابلة للحذف (جميعها معزولة أو لا سجلات)."], avatar_url=avatar))
         return
 
@@ -397,7 +397,7 @@ async def _delete_all_core(responder, user: discord.abc.User, avatar):
     if preserved_isolated > 0:
         checklist.append(f"⊘ سجلات الأعمال المعزولة — {preserved_isolated} سجل (مُستثناة)")
     children = [
-        cards.header(["## ✅ تم حذف السجلات", f"<@{user.id}>"], avatar),
+        cards.header(["## تم حذف السجلات", f"<@{user.id}>"], avatar),
         cards.sep(2),
         cards.text("\n".join(checklist)),
         cards.sep(),
@@ -424,7 +424,7 @@ async def delete_all_work_slash(interaction: discord.Interaction):
         await _delete_all_core(responder, interaction.user, avatar)
 
     await send_confirm_card(
-        interaction, "⚠️ تأكيد حذف السجلات",
+        interaction, "تأكيد حذف السجلات",
         "سيتم حذف **كل السجلات** غير المعزولة من كل الأعضاء. لا يمكن التراجع.",
         confirm)
 
@@ -454,16 +454,16 @@ async def delete_all_works(interaction: discord.Interaction):
     works = await load_works()
     if not works:
         await interaction.response.send_message(view=cards.error_card(
-            "📭 لا توجد أعمال", ["لا توجد أعمال في القائمة."]), ephemeral=True)
+            "لا توجد أعمال", ["لا توجد أعمال في القائمة."]), ephemeral=True)
         return
 
     async def confirm(interaction2: discord.Interaction):
         await save_works([])
         await log_audit("حذف_كل_الأعمال", interaction.user.id, None, f"تم حذف {len(works)} عمل")
-        await finish_card(interaction2, "✅ تم حذف جميع الأعمال",
+        await finish_card(interaction2, "تم حذف جميع الأعمال",
                           [f"حُذفت **{len(works)}** أعمال من القائمة.", "لم تتأثر السجلات المالية."])
 
     await send_confirm_card(
-        interaction, "⚠️ تأكيد حذف الأعمال",
+        interaction, "تأكيد حذف الأعمال",
         f"سيتم حذف **جميع الأعمال ({len(works)} عمل)** من القائمة.\nلن تتأثر السجلات.",
         confirm)

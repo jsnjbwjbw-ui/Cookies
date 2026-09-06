@@ -59,8 +59,8 @@ async def set_allowed_channels_slash(interaction: discord.Interaction,
         for ch in SETTINGS["allowed_channels"]
     )
     await interaction.response.send_message(view=cards.success_card(
-        "✅ تم تحديث القنوات المسموحة",
-        [f"القنوات المسموحة الآن: {channels_str}",
+        "تم تحديث القنوات المسموحة",
+        ["القنوات المسموحة الآن:", channels_str,
          "-# أوامر التسجيل لن تُقبل خارج هذه القنوات."],
         avatar_url=avatar_url), ephemeral=True)
     await log_audit("تحديد_قنوات", interaction.user.id, None, f"القنوات الجديدة: {channels_str}")
@@ -110,8 +110,8 @@ async def set_allowed_channels_text(ctx, channel1: str, channel2: str = None):
     )
     avatar_url = ctx.bot.user.display_avatar.url if ctx.bot.user else None
     await ctx.send(view=cards.success_card(
-        "✅ تم تحديث القنوات المسموحة",
-        [f"القنوات المسموحة الآن: {channels_str}"],
+        "تم تحديث القنوات المسموحة",
+        ["القنوات المسموحة الآن:", channels_str],
         avatar_url=avatar_url))
     await log_audit("تحديد_قنوات", ctx.author.id, None, f"القنوات الجديدة: {channels_str}")
 
@@ -130,7 +130,7 @@ async def upload_records(interaction: discord.Interaction, file: discord.Attachm
     await interaction.response.defer(ephemeral=True)
     if not file.filename.endswith('.json'):
         await interaction.followup.send(view=cards.error_card(
-            "❌ الملف غير مدعوم",
+            "الملف غير مدعوم",
             ["الملف يجب أن يكون بصيغة JSON."],
             avatar_url=avatar_url), ephemeral=True)
         return
@@ -144,7 +144,7 @@ async def upload_records(interaction: discord.Interaction, file: discord.Attachm
             works_data = data.get("works", None)
         else:
             await interaction.followup.send(view=cards.error_card(
-                "❌ الملف غير صالح",
+                "الملف غير صالح",
                 ["محتوى الملف غير مفهوم — ارفع ملف نسخة احتياطية صالح."],
                 avatar_url=avatar_url), ephemeral=True)
             return
@@ -152,7 +152,7 @@ async def upload_records(interaction: discord.Interaction, file: discord.Attachm
         # Update records
         if not isinstance(records_data, dict):
             await interaction.followup.send(view=cards.error_card(
-                "❌ قسم records غير صالح",
+                "قسم records غير صالح",
                 ["قسم السجلات في الملف غير صالح."],
                 avatar_url=avatar_url), ephemeral=True)
             return
@@ -191,7 +191,7 @@ async def upload_records(interaction: discord.Interaction, file: discord.Attachm
                 added_works_count = len(works_data)  # override count with explicit works data
             else:
                 await interaction.followup.send(view=cards.error_card(
-                    "⚠️ قسم works غير صالح",
+                    "قسم works غير صالح",
                     ["تم تحديث السجلات لكن قسم works غير صالح (تم تجاهله)."],
                     avatar_url=avatar_url), ephemeral=True)
                 await log_audit("رفع_البيانات", interaction.user.id, None,
@@ -205,7 +205,7 @@ async def upload_records(interaction: discord.Interaction, file: discord.Attachm
 
         # بطاقة النجاح — قائمة مراحل ✓
         children: list = [
-            cards.header(["## ✅ تم استعادة البيانات", "<@" + str(interaction.user.id) + ">"], avatar_url),
+            cards.header(["## تم استعادة البيانات", "<@" + str(interaction.user.id) + ">"], avatar_url),
             cards.sep(2),
         ]
         checklist = [
@@ -221,12 +221,12 @@ async def upload_records(interaction: discord.Interaction, file: discord.Attachm
         await interaction.followup.send(view=cards.Card(cards.ACCENT_GREEN, *children), ephemeral=True)
     except json.JSONDecodeError:
         await interaction.followup.send(view=cards.error_card(
-            "❌ الملف ليس بصيغة JSON صحيحة",
+            "الملف ليس بصيغة JSON صحيحة",
             ["تحقق من الملف ثم أعد الرفع."],
             avatar_url=avatar_url), ephemeral=True)
     except Exception as e:
         print(f"[ERROR] Slash command restore failed: {e}")
         await interaction.followup.send(view=cards.error_card(
-            "❌ فشل الرفع",
+            "فشل الرفع",
             [f"حدث خطأ: {str(e)[:500]}"],
             avatar_url=avatar_url), ephemeral=True)

@@ -90,7 +90,7 @@ async def get_works_info(guild: discord.Guild):
                     if e.get("username"):
                         username_hint = e["username"]
                         break
-            display = format_member_display(guild, uid, username_hint)
+            display = member_display_name(guild, uid, username_hint)
             members_list.append((uid, display, member_stats["count"], member_stats["total"], dict(member_stats["types"])))
         members_list.sort(key=lambda item: (item[2], item[3]), reverse=True)
         works_info.append((work_name, members_list))
@@ -157,16 +157,20 @@ class WorksBrowseView(DynamicCardView):
         total_ch, total_amt = self._totals()
         children: list = [
             cards.header(
-                ["## 🗂️ أعمال الفريق",
-                 f"**{len(self.works_info)}** أعمال — 📑 **{total_ch}** فصول — 💵 **{self.currency}{total_amt:,.2f}**"],
+                ["## أعمال الفريق",
+                 "اختر عملاً من القائمة لرؤية مساهميه وتفاصيل فصولهم."],
                 avatar,
             ),
             cards.sep(2),
+            cards.text(
+                f"**الأعمال:** {len(self.works_info)}\n"
+                f"**الفصول:** {total_ch}\n"
+                f"**💰 الإجمالي:** {self.currency}{total_amt:,.2f}"
+            ),
+            cards.sep(),
         ]
         page_items = self._options()
         if page_items:
-            children.append(cards.text("-# اختر عملاً من القائمة لرؤية مساهميه وتفاصيل فصولهم."))
-            children.append(cards.sep())
             children.append(cards.make_select("اختر العمل...", page_items, self.select_callback))
         else:
             children.append(cards.text("لا توجد أعمال متاحة بعد — تُضاف الأعمال من /اضافة_عمل."))
@@ -194,7 +198,6 @@ class WorkMembersView(DynamicCardView):
 
     async def select_callback(self, interaction: discord.Interaction):
         user_id = int(interaction.data['values'][0])
-        user_display = next((info[1] for info in self.members_info if info[0] == user_id), str(user_id))
         records = await load_records()
         isolated = get_isolated_work_names(await load_works())
         user_entries = records.get(str(user_id), [])
@@ -202,8 +205,8 @@ class WorkMembersView(DynamicCardView):
         if not work_entries:
             member_obj = _guild_member(self.guild, user_id)
             await interaction.response.send_message(
-                view=cards.error_card("❌ لا توجد فصول",
-                                      [f"لا توجد فصول للعضو {user_display} في عمل {self.work_name}."],
+                view=cards.error_card("لا توجد فصول",
+                                      [f"لا توجد فصول للعضو <@{user_id}> في عمل **{self.work_name}**."],
                                       avatar_url=_member_avatar_or_none(member_obj)),
                 ephemeral=True)
             return
@@ -235,27 +238,32 @@ class WorkMembersView(DynamicCardView):
         total_chapters = sum(m[2] for m in self.members_info) if self.members_info else 0
         total_amount = sum(m[3] for m in self.members_info) if self.members_info else 0
         children: list = [
-            cards.header([f"## 👥 مساهمو العمل",
-                          f"**{cards.clamp(self.work_name, 60)}**\n"
-                          f"**{len(self.members_info)}** أعضاء — 📑 **{total_chapters}** فصول — 💵 **{self.currency}{total_amount:,.2f}**"],
+            cards.header([f"## مساهمو العمل",
+                          f"**{cards.clamp(self.work_name, 60)}**"],
                          avatar),
             cards.sep(2),
+            cards.text(
+                f"**الأعضاء:** {len(self.members_info)}\n"
+                f"**الفصول:** {total_chapters}\n"
+                f"**💰 الإجمالي:** {self.currency}{total_amount:,.2f}"
+            ),
+            cards.sep(),
         ]
         start = self.current_page * self.per_page
         page_members = self.members_info[start:start + self.per_page]
         if page_members:
-            # المرتبون الثلاثة الأوائل يظهرون كسطر سريع تحت الرأس
-            podium = "\n".join(
-                f"{'🥇' if k == 1 else '🥈' if k == 2 else '🥉'} {m[1]} — 📑 {m[2]} فصول — 💵 {self.currency}{m[3]:,.2f}"
-                for k, m in enumerate(page_members[:3], 1)
-            )
-            children.append(cards.text(f"**الأعلى مساهمة في هذا العمل**\n{podium}"))
+            # الثلاثة الأوائل: التاج للمركز الأول فقط
+            podium = []
+            for k, m in enumerate(page_members[:3], 1):
+                podium.append(f"{cards.rank_prefix(k)} <@{m[0]}>")
+                podium.append(f"-# {m[2]} فصول • 💰 {self.currency}{m[3]:,.2f}")
+            children.append(cards.text("**الأعلى مساهمة في هذا العمل**\n" + "\n".join(podium)))
             children.append(cards.sep())
             options = [
                 discord.SelectOption(
-                    label=cards.clamp(m[1].lstrip('@'), 100),
+                    label=cards.clamp(m[1], 100),
                     value=str(m[0]),
-                    description=cards.clamp(f"📑 {m[2]} فصول • 💵 {self.currency}{m[3]:,.2f}", 100),
+                    description=cards.clamp(f"{m[2]} فصول • {self.currency}{m[3]:,.2f}", 100),
                 ) for m in page_members
             ]
             children.append(cards.make_select("اختر عضواً لعرض فصوله بالتفصيل...", options, self.select_callback))
@@ -318,9 +326,10 @@ class WorkDetailsView(DynamicCardView):
         total_amount = sum(ch['total'] for ch in self.chapters_list)
         count = len(self.chapters_list)
         avg = (total_amount / count) if count else 0
-        return ("### 📊 الملخص\n"
-                f"**📑 الفصول:** {count} • **💵 المجموع:** {self.currency}{total_amount:,.2f} • "
-                f"**💰 متوسط الفصل:** {self.currency}{avg:,.2f}")
+        return ("### الملخص\n"
+                f"**الفصول:** {count}\n"
+                f"**💰 المجموع:** {self.currency}{total_amount:,.2f}\n"
+                f"**متوسط الفصل:** {self.currency}{avg:,.2f}")
 
     def _types_block(self) -> str | None:
         stats = defaultdict(lambda: {"c": 0, "t": 0.0})
@@ -335,7 +344,7 @@ class WorkDetailsView(DynamicCardView):
         for t, s in sorted(stats.items(), key=lambda kv: -kv[1]["c"]):
             bar = cards.progress_bar(s["c"], max_c)
             lines.append(f"• **{str(t).replace('_', ' ').title()}** — {bar} **{s['c']}** فصول — {self.currency}{s['t']:,.2f}")
-        return "### 🛠️ التوزيع على التخصصات\n" + "\n".join(lines)
+        return "### التوزيع على التخصصات\n" + "\n".join(lines)
 
     def _chapters_block(self) -> str:
         ordered = sort_entries_by_chapter(self.chapters_list)
@@ -343,18 +352,18 @@ class WorkDetailsView(DynamicCardView):
         page = ordered[start:start + self.items_per_page]
         lines = []
         for ch in page:
-            note = f"\n  -# 📝 {ch['notes']}" if ch.get('notes') else ""
+            note = f"\n  -# {ch['notes']}" if ch.get('notes') else ""
             lines.append(f"• **فصل {ch['chapter']}** — {ch.get('type', 'غير محدد')} — {self.currency}{ch.get('total', 0):.2f}{note}")
-        return "### 📑 الفصول\n" + "\n".join(lines)
+        return "### الفصول\n" + "\n".join(lines)
 
     def build_children(self) -> list:
         member = _guild_member(self.guild, self.user_id)
         avatar = _member_avatar_or_none(member)
-        who = member.mention if member else f"**{self.user_name}**"
+        who = member.mention if member else f"<@{self.user_id}>"
         children: list = [
             cards.header(
-                [f"## 📖 {cards.clamp(self.work_name, 60)}",
-                 f"{who}\n📄 تفاصيل الفصول المسجلة في هذا العمل"],
+                [f"## {cards.clamp(self.work_name, 60)}",
+                 who],
                 avatar,
             ),
             cards.sep(2),
