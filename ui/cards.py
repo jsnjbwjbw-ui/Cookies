@@ -1,13 +1,14 @@
 # ═══════════════════════════════════════════════════════════════
-# 🔧 عدّة التصميم الموحدة — ZEUS Components V2
+# 🔧 عدّة التصميم الموحدة — Cookies Tracker Components V2
 # نقل اللغة البصرية الكاملة من بوت السحب ZEUS:
 #   حاوية واحدة (Container) بلون accent حسب الحالة + رأس Section
-#   بصورة مصغرة + فواصل (Separator) + شريط تقدم ▰▱ + قائمة مراحل
-#   ✓ ▸ · ✗ ⊘ + تذييل -# ZEUS + أزرار بنفس الأنماط.
+#   بصورة مصغرة (للبوت أو للعضو المعنيّ) + فواصل (Separator) +
+#   شريط تقدم ▰▱ + قائمة مراحل ✓ ▸ · ✗ ⊘ + تذييل -# Cookies Tracker
+#   + أزرار بنفس الأنماط.
 # ═══════════════════════════════════════════════════════════════
 from __future__ import annotations
 
-from typing import Awaitable, Callable, Iterable, Optional
+from typing import Awaitable, Callable, Iterable, Optional, Union
 
 import discord
 from discord import ui
@@ -18,7 +19,7 @@ ACCENT_GREEN = 0x57f287   # الأخضر — النجاح / الاكتمال / �
 ACCENT_RED = 0xed4245     # الأحمر — الفشل / الرفض
 ACCENT_GRAY = 0x95a5a6    # الرمادي — الإلغاء / المحذوف
 
-BOT_SIGNATURE = "ZEUS"
+BOT_SIGNATURE = "Cookies Tracker"
 
 
 # ───────────────────────────────────────────────────────────────
@@ -44,6 +45,18 @@ def header(lines: Iterable[str], avatar_url: Optional[str] = None):
     if avatar_url:
         return ui.Section(text(content), accessory=ui.Thumbnail(avatar_url))
     return text(content)
+
+
+def member_header(lines: Iterable[str], member) -> Section | TextDisplay:
+    """رأس البطاقة بصورة العضو المعنيّ — تُستخدم في كل بطاقات الأعضاء
+    (/شغل، /الأعضاء، الإيصالات، المكافآت…) بدل صورة البوت."""
+    url: Optional[str] = None
+    try:
+        if member is not None and hasattr(member, "display_avatar"):
+            url = member.display_avatar.url
+    except Exception:
+        url = None
+    return header(lines, url)
 
 
 def clamp(value: Optional[str], limit: int) -> str:
@@ -80,7 +93,7 @@ def container(accent: int, *children) -> ui.Container:
 
 class Card(ui.LayoutView):
     """بطاقة Components V2: حاوية واحدة بلون accent كما في بوت السحب.
-    مثال: Card(ACCENT_GOLD, header(["## 📖 ZEUS"], url), sep(2), text("نص"))"""
+    مثال: Card(ACCENT_GOLD, header(["## 📖 Cookies Tracker"], url), sep(2), text("نص"))"""
 
     def __init__(self, accent: int, *children, timeout: Optional[float] = 300.0):
         super().__init__(timeout=timeout)
@@ -179,7 +192,7 @@ def simple_card(
     signature: bool = True,
     timeout: Optional[float] = 300.0,
 ) -> Card:
-    """بطاقة قياسية: رأس بصورة + فاصل كبير + المحتوى + تذييل -# ZEUS."""
+    """بطاقة قياسية: رأس بصورة + فاصل كبير + المحتوى + تذييل -# Cookies Tracker."""
     children: list = [header([f"## {title}"], avatar_url), sep(2)]
     body = "\n\n".join(l for l in lines if l)
     children.append(text(clamp(body, 3800)))

@@ -9,11 +9,35 @@ from discord import app_commands
 
 from state import bot
 from database import mongo_client
-from helpers.core import *
+from helpers.core import *  # noqa: F401 — يشمل is_admin الموحدة وتُعاد تصديرها لكل الملفات
 from ui import cards
 
-BOT_NAME = "ZEUS"
-BOT_PRESENCE = "ZEUS | /مساعدة"
+BOT_DISPLAY_NAME = "Cookies Tracker"   # الاسم الظاهر للجميع (يدعم الفراغات)
+BOT_USERNAME = "Cookies_Tracker"       # معرف الحساب (بدون فراغات حسب قواعد ديسكورد)
+BOT_PRESENCE = "Cookies Tracker | /مساعدة"
+
+
+async def _apply_bot_identity():
+    """فرض هوية البوت: الاسم الظاهر + المعرف + الحالة — مرة واحدة عند الإقلاع."""
+    # 1) الاسم الظاهر (global_name) — discord.py لا يعرضه في edit لذا نستخدم API مباشر
+    try:
+        if getattr(bot.user, "global_name", None) != BOT_DISPLAY_NAME:
+            route = discord.http.Route("PATCH", "/users/@me")
+            await bot.http.request(route, json={"global_name": BOT_DISPLAY_NAME})
+            try:
+                bot.user.global_name = BOT_DISPLAY_NAME
+            except Exception:
+                pass
+            print(f"[LOG] Bot display name set to {BOT_DISPLAY_NAME}")
+    except Exception as e:
+        print(f"[WARNING] Could not set display name: {e}")
+    # 2) المعرف (username) — فقط إن كان قديمًا (مثل ZEUS)
+    try:
+        if bot.user and bot.user.name != BOT_USERNAME:
+            await bot.user.edit(username=BOT_USERNAME)
+            print(f"[LOG] Bot username set to {BOT_USERNAME}")
+    except Exception as e:
+        print(f"[WARNING] Could not set username (قد يكون بسبب حد تغيير الأسماء في ديسكورد): {e}")
 
 
 async def on_command_error(ctx, error):
@@ -30,13 +54,8 @@ async def on_command_error(ctx, error):
 @bot.event
 async def on_ready():
     print(f"[LOG] Logged in as {bot.user}")
-    # ── هوية ZEUS: نفس سلوك بوت السحب (اسم + حالة + نشاط) ──
-    try:
-        if bot.user and bot.user.name != BOT_NAME:
-            await bot.user.edit(username=BOT_NAME)
-            print(f"[LOG] Bot username set to {BOT_NAME}")
-    except Exception as e:
-        print(f"[WARNING] Could not set username: {e}")
+    # ── هوية Cookies Tracker: الاسم الظاهر + المعرف + الحالة ──
+    await _apply_bot_identity()
     try:
         await bot.change_presence(
             status=discord.Status.online,
@@ -75,8 +94,8 @@ async def only_allowed_channel(ctx):
     return False
 
 
-def is_admin(interaction: discord.Interaction) -> bool:
-    return interaction.user.guild_permissions.manage_messages
+# is_admin تأتي من helpers.core عبر الاستيراد أعلاه (administrator أو manage_messages)
+# لتوحيد الصلاحية في كل أوامر البوت بدون تضارب.
 
 
 @tasks.loop(hours=24)

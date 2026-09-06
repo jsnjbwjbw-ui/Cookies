@@ -9,6 +9,14 @@ from tasks.lifecycle import work_autocomplete, registration_specialty_autocomple
 from ui import cards
 
 
+def _user_avatar(user):
+    """صورة العضو المعنيّ — تظهر في رأس الإيصال بدل صورة البوت."""
+    try:
+        return user.display_avatar.url if user else None
+    except Exception:
+        return None
+
+
 # ═══════════════════════════════════════════════════════════════
 # 🧾 بطاقة إيصال التسجيل — نفس بنية بطاقة العمل في بوت السحب:
 #   رأس Section بصورة البوت + منشن الطالب + سطر التصنيف، فاصل،
@@ -169,7 +177,7 @@ async def validate_registration(
 @app_commands.checks.cooldown(1, 5, key=lambda i: (i.user.id, i.command.qualified_name))
 async def register_slash(interaction: discord.Interaction, العمل: str, الفصول: str, التخصصات: str, ملاحظات: str = None):
     avatar_url = interaction.client.user.display_avatar.url if interaction.client.user else None
-    if interaction.channel.name not in SETTINGS.get("allowed_channels", []):
+    if not channel_allowed(interaction):
         await interaction.response.send_message(view=cards.channel_card(SETTINGS.get("allowed_channels", []), avatar_url), ephemeral=True)
         return
 
@@ -231,7 +239,7 @@ async def register_slash(interaction: discord.Interaction, العمل: str, ال
         filtered_types=filtered_types,
         total_amount=total_amount,
         notes=ملاحظات,
-        avatar_url=avatar_url,
+        avatar_url=_user_avatar(interaction.user),
     )
     await interaction.response.send_message(view=receipt)
 
@@ -276,7 +284,7 @@ async def register_for_member(
         await log_unauthorized(interaction.user.id, "تسجيل_للغير")
         await interaction.response.send_message(view=cards.permission_card(avatar_url), ephemeral=True)
         return
-    if interaction.channel.name not in SETTINGS.get("allowed_channels", []):
+    if not channel_allowed(interaction):
         await interaction.response.send_message(view=cards.channel_card(SETTINGS.get("allowed_channels", []), avatar_url), ephemeral=True)
         return
 
@@ -339,7 +347,7 @@ async def register_for_member(
         filtered_types=filtered_types,
         total_amount=total_amount,
         notes=ملاحظات,
-        avatar_url=avatar_url,
+        avatar_url=_user_avatar(عضو),
     )
     await interaction.response.send_message(view=receipt)
 
@@ -460,7 +468,7 @@ async def analysis(ctx, *, text_input=None):
         filtered_types=filtered_types,
         total_amount=total_amount,
         notes=notes,
-        avatar_url=avatar_url,
+        avatar_url=_user_avatar(ctx.author),
     )
     await ctx.send(view=receipt)
 

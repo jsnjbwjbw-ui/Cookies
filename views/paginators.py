@@ -8,8 +8,8 @@ from ui import cards
 
 
 # ═══════════════════════════════════════════════════════════════
-# 🔧 أساس مشترك: LayoutView ديناميكي يبني حاوية ZEUS من جديد
-#   عند كل تغيير صفحة — نفس سلوك تحرير البطاقة الواحدة في بوت السحب.
+# 🔧 أساس مشترك: LayoutView ديناميكي يبني حاوية Cookies Tracker
+#   من جديد عند كل تغيير صفحة — نفس سلوك تحرير البطاقة الواحدة.
 # ═══════════════════════════════════════════════════════════════
 class DynamicCardView(ui.LayoutView):
     ACCENT = cards.ACCENT_GOLD
@@ -46,8 +46,18 @@ class DynamicCardView(ui.LayoutView):
         return b.display_avatar.url if b else None
 
 
+def _guild_member(guild: discord.Guild | None, user_id) -> discord.Member | None:
+    """جلب العضو من الكاش (سريع) لاستخدام صورته في البطاقات."""
+    if guild is None:
+        return None
+    try:
+        return guild.get_member(int(user_id))
+    except (ValueError, TypeError):
+        return None
+
+
 # ═══════════════════════════════════════════════════════════════
-# 1️⃣ قائمة الأعمال — نفس نمط بطاقة /مواقع في بوت السحب
+# 1️⃣ قائمة الأعمال — مرتبة من الأكثر نشاطًا إلى الأقل
 # ═══════════════════════════════════════════════════════════════
 async def get_works_info(guild: discord.Guild):
     """Build list of works with their contributors."""
@@ -96,9 +106,15 @@ class WorksBrowseView(DynamicCardView):
         self.currency = SETTINGS.get('currency', '$') or '$'
         self.per_page = 24
         self.current_page = 0
-        self.works_info = works_info
-        self.total_pages = max(1, (len(works_info) + self.per_page - 1) // self.per_page)
+        # الأكثر فصولًا أولًا — الأعمال النشطة تظهر دائمًا في المقدمة
+        self.works_info = sorted(works_info, key=lambda w: sum(m[2] for m in w[1]), reverse=True)
+        self.total_pages = max(1, (len(self.works_info) + self.per_page - 1) // self.per_page)
         self.rebuild()
+
+    def _totals(self):
+        total_ch = sum(m[2] for _, ms in self.works_info for m in ms)
+        total_amt = sum(m[3] for _, ms in self.works_info for m in ms)
+        return total_ch, total_amt
 
     def _options(self):
         start = self.current_page * self.per_page
@@ -111,7 +127,7 @@ class WorksBrowseView(DynamicCardView):
                 label=cards.clamp(work_name, 100),
                 value=work_name,
                 description=cards.clamp(
-                    f"{len(members)} أعضاء • {chapters} فصول • {self.currency}{total:.2f}", 100)
+                    f"{len(members)} أعضاء • {chapters} فصول • {self.currency}{total:,.2f}", 100)
             ))
         return options
 
@@ -123,7 +139,7 @@ class WorksBrowseView(DynamicCardView):
 
     async def refresh_list(self, interaction: discord.Interaction):
         new_info = await get_works_info(self.guild)
-        self.works_info = new_info
+        self.works_info = sorted(new_info, key=lambda w: sum(m[2] for m in w[1]), reverse=True)
         self.current_page = 0
         self.total_pages = max(1, (len(new_info) + self.per_page - 1) // self.per_page)
         await self.refresh(interaction)
@@ -138,16 +154,18 @@ class WorksBrowseView(DynamicCardView):
 
     def build_children(self) -> list:
         avatar = self.avatar(self.guild)
+        total_ch, total_amt = self._totals()
         children: list = [
             cards.header(
-                ["## 🗂️ أعمال الفريق", f"**{len(self.works_info)}** أعمال متاحة."],
+                ["## 🗂️ أعمال الفريق",
+                 f"**{len(self.works_info)}** أعمال — 📑 **{total_ch}** فصول — 💵 **{self.currency}{total_amt:,.2f}**"],
                 avatar,
             ),
             cards.sep(2),
         ]
         page_items = self._options()
         if page_items:
-            children.append(cards.text("-# اختر عملاً من القائمة لرؤية المساهمين وتفاصيلهم."))
+            children.append(cards.text("-# اختر عملاً من القائمة لرؤية مساهميه وتفاصيل فصولهم."))
             children.append(cards.sep())
             children.append(cards.make_select("اختر العمل...", page_items, self.select_callback))
         else:
@@ -159,7 +177,8 @@ class WorksBrowseView(DynamicCardView):
 
 
 class WorkMembersView(DynamicCardView):
-    """أعضاء عمل محدد — ملخص + قائمة اختيار عضو + عودة إلى القائمة."""
+    """مساهمو عمل محدد — قائمة اختيار عضو (البيانات في وصف كل خيار)
+    + عودة إلى القائمة. بلا نصوص مكررة فوق القائمة لراحة العين."""
 
     def __init__(self, browse: WorksBrowseView, work_name, members_info):
         super().__init__(timeout=300.0)
@@ -181,9 +200,11 @@ class WorkMembersView(DynamicCardView):
         user_entries = records.get(str(user_id), [])
         work_entries = [e for e in user_entries if e.get("work_name") == self.work_name and e.get("work_name") not in isolated]
         if not work_entries:
+            member_obj = _guild_member(self.guild, user_id)
             await interaction.response.send_message(
                 view=cards.error_card("❌ لا توجد فصول",
-                                      [f"لا توجد فصول للعضو {user_display} في عمل {self.work_name}."]),
+                                      [f"لا توجد فصول للعضو {user_display} في عمل {self.work_name}."],
+                                      avatar_url=_member_avatar_or_none(member_obj)),
                 ephemeral=True)
             return
         chapters_details = [{
@@ -194,7 +215,7 @@ class WorkMembersView(DynamicCardView):
         } for e in work_entries]
         view = WorkDetailsView(
             self.work_name, chapters_details, user_id, user_display,
-            self.currency, back_view=self,
+            self.currency, back_view=self, guild=self.guild,
         )
         await interaction.response.edit_message(view=view)
 
@@ -214,30 +235,30 @@ class WorkMembersView(DynamicCardView):
         total_chapters = sum(m[2] for m in self.members_info) if self.members_info else 0
         total_amount = sum(m[3] for m in self.members_info) if self.members_info else 0
         children: list = [
-            cards.header([f"## 📖 {cards.clamp(self.work_name, 80)}",
-                          f"**{len(self.members_info)}** أعضاء — **{total_chapters}** فصول — **{self.currency}{total_amount:.2f}**"],
+            cards.header([f"## 👥 مساهمو العمل",
+                          f"**{cards.clamp(self.work_name, 60)}**\n"
+                          f"**{len(self.members_info)}** أعضاء — 📑 **{total_chapters}** فصول — 💵 **{self.currency}{total_amount:,.2f}**"],
                          avatar),
             cards.sep(2),
         ]
         start = self.current_page * self.per_page
         page_members = self.members_info[start:start + self.per_page]
         if page_members:
-            preview_lines = []
-            for member in page_members[:10]:
-                preview_lines.append(f"• {member[1]} — {member[2]} فصول — {self.currency}{member[3]:.2f}")
-            body = "\n".join(preview_lines)
-            if len(self.members_info) > 10:
-                body += f"\n-# و{len(self.members_info) - 10} عضوًا آخر في هذه الصفحة…"
-            children.append(cards.text(body))
+            # المرتبون الثلاثة الأوائل يظهرون كسطر سريع تحت الرأس
+            podium = "\n".join(
+                f"{'🥇' if k == 1 else '🥈' if k == 2 else '🥉'} {m[1]} — 📑 {m[2]} فصول — 💵 {self.currency}{m[3]:,.2f}"
+                for k, m in enumerate(page_members[:3], 1)
+            )
+            children.append(cards.text(f"**الأعلى مساهمة في هذا العمل**\n{podium}"))
             children.append(cards.sep())
             options = [
                 discord.SelectOption(
-                    label=cards.clamp(m[1], 100),
+                    label=cards.clamp(m[1].lstrip('@'), 100),
                     value=str(m[0]),
-                    description=cards.clamp(f"{m[2]} فصول • {self.currency}{m[3]:.2f}", 100),
+                    description=cards.clamp(f"📑 {m[2]} فصول • 💵 {self.currency}{m[3]:,.2f}", 100),
                 ) for m in page_members
             ]
-            children.append(cards.make_select("اختر عضواً...", options, self.select_callback))
+            children.append(cards.make_select("اختر عضواً لعرض فصوله بالتفصيل...", options, self.select_callback))
         else:
             children.append(cards.text("لا يوجد مساهمون في هذا العمل بعد."))
         if self.total_pages > 1:
@@ -245,16 +266,26 @@ class WorkMembersView(DynamicCardView):
             children.append(cards.pager_row(self.current_page, self.total_pages, self.prev_page, self.next_page))
         children.append(cards.sep())
         children.append(cards.row(
-            cards.secondary_btn("عودة إلى النتائج", self.back_to_browse, emoji="↩")
+            cards.secondary_btn("عودة إلى الأعمال", self.back_to_browse, emoji="↩")
         ))
         return children
 
 
+def _member_avatar_or_none(member) -> str | None:
+    try:
+        return member.display_avatar.url if member else None
+    except Exception:
+        return None
+
+
 class WorkDetailsView(DynamicCardView):
-    """تفاصيل فصول عضو داخل عمل — 10 فصول/صفحة + عودة إلى الأعضاء."""
+    """تفاصيل فصول عضو داخل عمل — الترتيب الجديد المقروء:
+    1️⃣ الملخص الرقمي → 2️⃣ التوزيع على التخصصات (بأشرطة) →
+    3️⃣ قائمة الفصول مرتبة رقميًا من الأقدم — ثم التنقل والعودة.
+    الصورة المصغرة لصورة العضو المعنيّ."""
 
     def __init__(self, work_name, chapters_list, user_id, user_name, currency,
-                 back_callback: callable = None, back_view=None):
+                 back_callback: callable = None, back_view=None, guild: discord.Guild | None = None):
         super().__init__(timeout=300.0)
         self.work_name = work_name
         self.chapters_list = chapters_list
@@ -266,6 +297,7 @@ class WorkDetailsView(DynamicCardView):
         self.total_pages = max(1, (len(chapters_list) + self.items_per_page - 1) // self.items_per_page)
         self.back_callback = back_callback
         self.back_view = back_view
+        self.guild = guild
         self.rebuild()
 
     async def back_action(self, interaction: discord.Interaction):
@@ -282,36 +314,68 @@ class WorkDetailsView(DynamicCardView):
         self.current_page = min(self.total_pages - 1, self.current_page + 1)
         await self.refresh(interaction)
 
-    async def close_view(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+    def _summary_block(self) -> str:
+        total_amount = sum(ch['total'] for ch in self.chapters_list)
+        count = len(self.chapters_list)
+        avg = (total_amount / count) if count else 0
+        return ("### 📊 الملخص\n"
+                f"**📑 الفصول:** {count} • **💵 المجموع:** {self.currency}{total_amount:,.2f} • "
+                f"**💰 متوسط الفصل:** {self.currency}{avg:,.2f}")
+
+    def _types_block(self) -> str | None:
+        stats = defaultdict(lambda: {"c": 0, "t": 0.0})
+        for ch in self.chapters_list:
+            s = stats[ch.get('type', 'غير محدد')]
+            s["c"] += 1
+            s["t"] += ch.get('total', 0)
+        if not stats:
+            return None
+        max_c = max(s["c"] for s in stats.values())
+        lines = []
+        for t, s in sorted(stats.items(), key=lambda kv: -kv[1]["c"]):
+            bar = cards.progress_bar(s["c"], max_c)
+            lines.append(f"• **{str(t).replace('_', ' ').title()}** — {bar} **{s['c']}** فصول — {self.currency}{s['t']:,.2f}")
+        return "### 🛠️ التوزيع على التخصصات\n" + "\n".join(lines)
+
+    def _chapters_block(self) -> str:
+        ordered = sort_entries_by_chapter(self.chapters_list)
+        start = self.current_page * self.items_per_page
+        page = ordered[start:start + self.items_per_page]
+        lines = []
+        for ch in page:
+            note = f"\n  -# 📝 {ch['notes']}" if ch.get('notes') else ""
+            lines.append(f"• **فصل {ch['chapter']}** — {ch.get('type', 'غير محدد')} — {self.currency}{ch.get('total', 0):.2f}{note}")
+        return "### 📑 الفصول\n" + "\n".join(lines)
 
     def build_children(self) -> list:
-        avatar = self.avatar(self.guild if hasattr(self, "guild") else None)
-        total_amount = sum(ch['total'] for ch in self.chapters_list)
+        member = _guild_member(self.guild, self.user_id)
+        avatar = _member_avatar_or_none(member)
+        who = member.mention if member else f"**{self.user_name}**"
         children: list = [
             cards.header(
-                [f"## 📖 {cards.clamp(self.work_name, 80)}",
-                 f"**{self.user_name}** — **{len(self.chapters_list)}** فصول — **{self.currency}{total_amount:.2f}**"],
+                [f"## 📖 {cards.clamp(self.work_name, 60)}",
+                 f"{who}\n📄 تفاصيل الفصول المسجلة في هذا العمل"],
                 avatar,
             ),
             cards.sep(2),
         ]
-        start = self.current_page * self.items_per_page
-        page_chapters = self.chapters_list[start:start + self.items_per_page]
-        lines = []
-        for i, ch in enumerate(page_chapters, start + 1):
-            note = f" | {ch.get('notes')}" if ch.get('notes') else ""
-            lines.append(f"**{i}.** فصل {ch['chapter']} — {ch['type']} — {self.currency}{ch['total']:.2f}{note}")
-        children.append(cards.text("\n".join(lines)))
+        blocks = [self._summary_block()]
+        types_block = self._types_block()
+        if types_block:
+            blocks.append(types_block)
+        blocks.append(self._chapters_block())
+        children.append(cards.text(cards.clamp("\n\n".join(blocks), 3600)))
         children.append(cards.sep())
-        children.append(cards.text(f"-# إجمالي العمل: {self.currency}{total_amount:.2f} • صفحة {self.current_page + 1} من {self.total_pages}"))
+        children.append(cards.text(
+            f"-# الفصول مرتبة رقميًا • صفحة {self.current_page + 1} من {self.total_pages} • "
+            f"إجمالي العمل: {self.currency}{sum(ch['total'] for ch in self.chapters_list):,.2f}"))
         if self.total_pages > 1:
             children.append(cards.sep())
             children.append(cards.pager_row(self.current_page, self.total_pages, self.prev_page, self.next_page))
         children.append(cards.sep())
-        back_btn = (cards.secondary_btn("عودة إلى الأعضاء", self.back_action, emoji="↩")
+        back_btn = (cards.secondary_btn("عودة إلى المساهمين", self.back_action, emoji="↩")
                     if (self.back_view is not None or self.back_callback is not None)
-                    else cards.secondary_btn("عودة إلى الأعضاء", self.close_view, emoji="↩", disabled=True))
+                    else cards.secondary_btn("عودة إلى المساهمين", None, emoji="↩", disabled=True))
         children.append(cards.row(back_btn))
         return children
 

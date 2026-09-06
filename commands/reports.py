@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 import discord
 from discord import app_commands
@@ -10,24 +10,61 @@ from helpers.core import make_embed  # noqa: F401 (متاح للتوافق)
 from views.paginators import WorksPaginator, get_works_info
 from tasks.lifecycle import specialty_autocomplete
 from ui import cards
+from commands.admin import PaymentReportPaginator, build_payment_rows
 
 
 def _bot_avatar():
     return bot.user.display_avatar.url if bot.user else None
 
 
-def _member_avatar(member: discord.Member | None):
-    return member.display_avatar.url if member else None
+def _member_avatar(member):
+    try:
+        return member.display_avatar.url if member else None
+    except Exception:
+        return None
+
+
+def _medal(rank: int) -> str:
+    return "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else "🏅" if rank <= 10 else "▫️"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 🔙 نظام العودة الموحد: back يكون view جاهزًا أو دالة (متزامنة أو
+#   غير متزامنة) تُعيد العرض الأب — بحيث تُبنى لوحة التحكم ببيانات
+#   حية عند كل عودة إليها.
+# ═══════════════════════════════════════════════════════════════
+class BackNav:
+    back = None
+
+    async def _resolve_back(self):
+        if self.back is None:
+            return None
+        if callable(self.back):
+            result = self.back()
+            if hasattr(result, "__await__"):
+                result = await result
+            return result
+        return self.back
+
+    async def _back_cb(self, interaction: discord.Interaction):
+        parent = await self._resolve_back()
+        if parent is None:
+            await interaction.response.defer()
+            return
+        await interaction.response.edit_message(view=parent)
+
+    def _back_row(self, label="عودة") -> ui.ActionRow:
+        return cards.row(cards.secondary_btn(label, self._back_cb, emoji="↩"))
 
 
 # ═══════════════════════════════════════════════════════════════
 # 🎨 ملخص شغل عضو — بطاقة حية بقائمة أعمال منسدلة + تفاصيل
-#   (نفس بنية بطاقات بوت السحب: رأس بصورة + فواصل + عودة ↩)
+#   الصورة المصغرة دائمًا لصورة العضو المعنيّ وليس صورة البوت.
 # ═══════════════════════════════════════════════════════════════
 class WorkSummarySelectView(ui.LayoutView):
-    def __init__(self, works, bonuses, deductions, member: discord.Member, user_id,
+    def __init__(self, works, bonuses, deductions, member, user_id,
                  currency, title_prefix="📊 ملخص شغل"):
-        super().__init__(timeout=300.0)
+        super().__init__(timeout=600.0)
         self.works = works
         self.bonuses = bonuses
         self.deductions = deductions
@@ -58,106 +95,120 @@ class WorkSummarySelectView(ui.LayoutView):
         total_works = len(self.works)
         total_chapters = sum(len(entries) for entries in self.works.values())
         lines = [
-            f"**📁 عدد الأعمال:** {total_works}",
-            f"**📑 إجمالي الفصول:** {total_chapters}",
-            f"**💰 إجمالي الأعمال:** {self.currency}{gross:.2f}",
+            "### 📈 الحصيلة الكلية",
+            f"**📁 الأعمال:** {total_works} • **📑 الفصول:** {total_chapters}",
+            f"**💰 قيمة الأعمال:** {self.currency}{gross:,.2f}",
         ]
         if total_bonus:
-            lines.append(f"**🎁 إجمالي المكافآت:** {self.currency}{total_bonus:.2f}")
+            lines.append(f"**🎁 المكافآت:** {self.currency}{total_bonus:,.2f}")
         if total_deduct:
-            lines.append(f"**🔻 إجمالي الخصومات:** {self.currency}{total_deduct:.2f}")
-        lines.append(f"**💵 الصافي النهائي:** {self.currency}{net:.2f}")
+            lines.append(f"**🔻 الخصومات:** {self.currency}{total_deduct:,.2f}")
+        lines.append(f"**💵 الصافي النهائي:** {self.currency}{net:,.2f}")
         return lines
 
     def _summary_children(self, avatar):
         children: list = [
-            cards.header([f"## {self.title_prefix} {self.member.display_name}"], avatar),
+            cards.header([f"## {self.title_prefix} {self.member.display_name}",
+                          f"{self.member.mention}"], avatar),
             cards.sep(2),
             cards.text("\n".join(self._summary_stats_lines())),
-            cards.sep(),
         ]
+        # ترتيب الأعمال من الأكثر فصولًا
+        ranked = sorted(self.works.items(), key=lambda kv: len(kv[1]), reverse=True)
         options = []
-        for i, work_name in enumerate(sorted(self.works.keys())):
+        for i, (work_name, entries) in enumerate(ranked):
             if i >= 24:
                 break
-            chapters = len(self.works[work_name])
+            chapters = len(entries)
+            total = sum(e.get("total", 0) for e in entries)
             options.append(discord.SelectOption(
                 label=cards.clamp(work_name, 100), value=work_name,
-                description=cards.clamp(f"{chapters} فصول", 100), emoji="📖"))
+                description=cards.clamp(f"📑 {chapters} فصول • 💵 {self.currency}{total:,.2f}", 100), emoji="📖"))
         if self.bonuses or self.deductions:
             options.append(discord.SelectOption(label="المكافآت والخصومات", value="__bonuses__",
                                                 description="تفاصيل المكافآت والخصومات", emoji="⚖️"))
         if len(self.works) > 1:
-            options.append(discord.SelectOption(label="عرض الكل", value="__all__",
+            options.append(discord.SelectOption(label="عرض كل الفصول", value="__all__",
                                                 description="جميع الفصول مجمعة", emoji="📚"))
         if options:
-            children.append(cards.text("-# اختر عملاً من القائمة لعرض التفاصيل."))
-            children.append(cards.sep())
-            children.append(cards.make_select("اختر عملاً لعرض التفاصيل...", options, self.select_callback))
+            children += [cards.sep(), cards.text("-# اختر عملاً من القائمة لعرض تفاصيله الدقيقة."),
+                         cards.make_select("اختر عملاً لعرض التفاصيل...", options, self.select_callback)]
         return children
 
     def _work_children(self, work_name, avatar):
-        entries = self.works[work_name]
+        entries = sort_entries_by_chapter(self.works[work_name])
         total = sum(e.get("total", 0) for e in entries)
         count = len(entries)
+        avg = (total / count) if count else 0
         types_count = {}
         for e in entries:
             t = e.get("work_type", "غير محدد")
-            types_count[t] = types_count.get(t, 0) + 1
-        type_str = ", ".join(f"**{k.replace('_',' ').title()}:** {v}" for k, v in types_count.items() if v > 0)
+            c, a = types_count.get(t, (0, 0.0))
+            types_count[t] = (c + 1, a + e.get("total", 0))
+        max_c = max(c for c, _ in types_count.values())
+        type_lines = [f"• **{t.replace('_', ' ').title()}** — {cards.progress_bar(c, max_c)} **{c}** فصول — {self.currency}{a:,.2f}"
+                      for t, (c, a) in sorted(types_count.items(), key=lambda kv: -kv[1][0])]
 
+        ch_lines = []
+        for e in entries:
+            note = f"\n  -# 📝 {e.get('notes')}" if e.get("notes") else ""
+            ch_lines.append(f"• **فصل {e.get('chapter', '؟')}** — {e.get('work_type', 'غير محدد')} — {self.currency}{e.get('total', 0):.2f}{note}")
+        shown = "\n".join(ch_lines[:12])
+        if len(ch_lines) > 12:
+            shown += f"\n-# … و{len(ch_lines) - 12} فصلًا إضافيًا"
+
+        body = "\n".join([
+            "### 📊 الملخص",
+            f"**📑 الفصول:** {count} • **💵 المجموع:** {self.currency}{total:,.2f} • **💰 متوسط الفصل:** {self.currency}{avg:,.2f}",
+            "",
+            "### 🛠️ التوزيع على التخصصات",
+            *type_lines,
+            "",
+            "### 📑 الفصول (مرتبة رقميًا)",
+            shown,
+        ])
         children: list = [
-            cards.header([f"## 📖 {cards.clamp(work_name, 80)}",
-                          f"**{count}** فصول — **{self.currency}{total:.2f}**"], avatar),
+            cards.header([f"## 📖 {cards.clamp(work_name, 60)}",
+                          f"{self.member.mention}"], avatar),
             cards.sep(2),
+            cards.text(cards.clamp(body, 3600)),
+            cards.sep(),
+            self._back_row(),
         ]
-        body_lines = [f"**📊 التخصصات:** {type_str}"] if type_str else []
-        lines = []
-        for i, e in enumerate(entries, 1):
-            ch = e.get("chapter", "؟")
-            tp = e.get("work_type", "غير محدد")
-            amt = e.get("total", 0)
-            note = f" | {e.get('notes')}" if e.get("notes") else ""
-            lines.append(f"**{i}.** فصل {ch} — {tp} — {self.currency}{amt:.2f}{note}")
-        if lines:
-            text_body = "\n".join(lines[:15])
-            if len(lines) > 15:
-                text_body += f"\n-# … و{len(lines) - 15} فصل إضافي"
-            body_lines.append(text_body)
-        children.append(cards.text("\n\n".join(body_lines)))
-        children += [cards.sep(), self._back_row()]
         return children
 
     def _all_children(self, avatar):
         children: list = [
-            cards.header([f"## 📚 جميع الفصول — {self.member.display_name}"], avatar),
+            cards.header([f"## 📚 جميع الفصول — {self.member.display_name}",
+                          f"{self.member.mention}"], avatar),
             cards.sep(2),
         ]
         chunks = []
-        for work_name, entries in self.works.items():
+        for work_name, entries in sorted(self.works.items(), key=lambda kv: -len(kv[1])):
             total = sum(e.get("total", 0) for e in entries)
             cnt = len(entries)
-            preview = [f"• {e.get('chapter','؟')} ({e.get('work_type','؟')}) {self.currency}{e.get('total',0):.2f}"
-                       for e in entries[:5]]
-            if len(entries) > 5:
-                preview.append("-# … والمزيد")
-            chunks.append(f"**📖 {work_name}** ({cnt} فصل — {self.currency}{total:.2f})\n" + "\n".join(preview))
+            preview = [f"  • فصل {e.get('chapter','؟')} — {e.get('work_type','؟')} — {self.currency}{e.get('total',0):.2f}"
+                       for e in sort_entries_by_chapter(entries)[:4]]
+            if len(entries) > 4:
+                preview.append("  -# … والمزيد")
+            chunks.append(f"**📖 {work_name}** ({cnt} فصل — {self.currency}{total:,.2f})\n" + "\n".join(preview))
         children.append(cards.text(cards.clamp("\n\n".join(chunks), 3400)))
         children += [cards.sep(), self._back_row()]
         return children
 
     def _bonuses_children(self, avatar):
         children: list = [
-            cards.header(["## ⚖️ المكافآت والخصومات", f"**{self.member.display_name}**"], avatar),
+            cards.header(["## ⚖️ المكافآت والخصومات",
+                          f"{self.member.mention}"], avatar),
             cards.sep(2),
         ]
-        bon_lines = [f"🎁 {e.get('chapter','مكافأة')}: {self.currency}{e.get('total',0):.2f} — {e.get('notes','')}"
-                     for e in self.bonuses] or ["لا يوجد"]
-        ded_lines = [f"🔻 {e.get('chapter','خصم')}: {self.currency}{abs(e.get('total',0)):.2f} — {e.get('notes','')}"
-                     for e in self.deductions] or ["لا يوجد"]
-        children.append(cards.text("**المكافآت**\n" + "\n".join(bon_lines)))
+        bon_lines = [f"• فصل {e.get('chapter','مكافأة')}: **{self.currency}{e.get('total',0):,.2f}** — {e.get('notes','')}"
+                     for e in self.bonuses] or ["• لا يوجد"]
+        ded_lines = [f"• فصل {e.get('chapter','خصم')}: **{self.currency}{abs(e.get('total',0)):,.2f}** — {e.get('notes','')}"
+                     for e in self.deductions] or ["• لا يوجد"]
+        children.append(cards.text("**🎁 المكافآت**\n" + "\n".join(bon_lines)))
         children.append(cards.sep())
-        children.append(cards.text("**الخصومات**\n" + "\n".join(ded_lines)))
+        children.append(cards.text("**🔻 الخصومات**\n" + "\n".join(ded_lines)))
         children += [cards.sep(), self._back_row()]
         return children
 
@@ -211,100 +262,383 @@ def get_top_members_dict(stat_doc):
     return {}
 
 
-async def build_top_card(guild: discord.Guild, currency, stat_doc, sort_by="amount", work_type=None, limit=10):
-    records = await load_visible_records()
-    all_members = get_top_members_dict(stat_doc)
-    members_stats = [(uid, stats) for uid, stats in all_members.items()]
+# ═══════════════════════════════════════════════════════════════
+# 🏆 /توب — عارض الترتيب (نسخة مُصلحة بالكامل)
+#   ملاحظة حرجة: لا يُسمح بتسمية أي دالة أو خاصية `_children`
+#   لأن discord.py يستخدم هذا الاسم داخليًا (كان سبب تعطل /توب).
+# ═══════════════════════════════════════════════════════════════
+class TopView(BackNav, ui.LayoutView):
+    def __init__(self, stat_doc, guild: discord.Guild, currency, back=None):
+        super().__init__(timeout=600.0)
+        self.stat_doc = stat_doc or {}
+        self.guild = guild
+        self.currency = currency if currency else '$'
+        self.back = back
+        self.sort_by = "amount"
+        self.current_type = None
+        self._member_cache = {}
 
-    if sort_by == "amount":
-        sorted_list = sorted(members_stats, key=lambda x: x[1].get('total_amount', 0), reverse=True)
-        title = f"🏆 أفضل {limit} أعضاء (إجمالي المبلغ)"
-    elif sort_by == "chapters":
-        sorted_list = sorted(members_stats, key=lambda x: x[1].get('total_entries', 0), reverse=True)
-        title = f"📑 أفضل {limit} أعضاء (عدد الفصول)"
-    elif sort_by == "by_type" and work_type:
-        filtered = []
-        for uid, stats in members_stats:
-            uid_str = str(uid)
-            if uid_str in records:
-                count = sum(1 for e in records[uid_str] if e.get("work_type") == work_type)
-                total = sum(e.get("total", 0) for e in records[uid_str] if e.get("work_type") == work_type)
-                if count > 0:
-                    filtered.append((uid, {"total_entries": count, "total_amount": total}))
-        sorted_list = sorted(filtered, key=lambda x: x[1].get('total_amount', 0), reverse=True)
-        title = f"🏆 أفضل {limit} أعضاء في {work_type.replace('_',' ').title()}"
-    else:
-        sorted_list = sorted(members_stats, key=lambda x: x[1].get('total_amount', 0), reverse=True)
-        title = f"🏆 أفضل {limit} أعضاء"
+    @classmethod
+    async def create(cls, stat_doc, guild: discord.Guild, currency, back=None):
+        self = cls(stat_doc, guild, currency, back)
+        await self.rebuild_async()
+        return self
 
-    avatar = _bot_avatar()
-    if not sorted_list:
-        return cards.info_card(title, ["لا توجد بيانات كافية."], avatar_url=avatar)
+    async def rebuild_async(self):
+        self.clear_items()
+        children = await self.build_children()
+        children.append(cards.sep())
+        children.append(cards.text(f"-# {cards.BOT_SIGNATURE}"))
+        self.add_item(cards.container(cards.ACCENT_GOLD, *children))
 
-    top_items = sorted_list[:limit]
-    medals = ["🥇", "🥈", "🥉"] + ["🏅"] * (limit - 3)
-    lines = []
+    async def refresh(self, interaction: discord.Interaction):
+        await self.rebuild_async()
+        await interaction.response.edit_message(view=self)
 
-    for i, (uid, stats_data) in enumerate(top_items, 1):
-        uid_int = int(uid)
-        member = guild.get_member(uid_int)  # محاولة من الكاش
-
-        if member is None:
+    async def _resolve_member(self, uid_int: int):
+        if uid_int in self._member_cache:
+            return self._member_cache[uid_int]
+        member = self.guild.get_member(uid_int) if self.guild else None
+        if member is None and self.guild:
             try:
-                member = await guild.fetch_member(uid_int)
+                member = await self.guild.fetch_member(uid_int)
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 member = None
+        self._member_cache[uid_int] = member
+        return member
 
-        if member:
-            display = member.mention
+    async def _ranking_lines(self) -> tuple[str, list]:
+        records = await load_visible_records()
+        members_stats = list(get_top_members_dict(self.stat_doc).items())
+        by_type = self.sort_by == "by_type" and self.current_type
+
+        if by_type:
+            filtered = []
+            for uid, _stats in members_stats:
+                entries = [e for e in records.get(str(uid), [])
+                           if e.get("work_type") == self.current_type]
+                if entries:
+                    filtered.append((uid, {
+                        "total_entries": len(entries),
+                        "total_amount": sum(e.get("total", 0) for e in entries),
+                    }))
+            sorted_list = sorted(filtered, key=lambda x: x[1]["total_amount"], reverse=True)
+            title = f"أبطال تخصص **{str(self.current_type).replace('_', ' ').title()}**"
+        elif self.sort_by == "chapters":
+            sorted_list = sorted(members_stats, key=lambda x: x[1].get("total_entries", 0), reverse=True)
+            title = "الترتيب حسب **عدد الفصول** 📑"
         else:
-            uid_str = str(uid)
-            fallback_name = None
-            if uid_str in records:
-                for e in records[uid_str]:
+            sorted_list = sorted(members_stats, key=lambda x: x[1].get("total_amount", 0), reverse=True)
+            title = "الترتيب حسب **إجمالي المبلغ** 💰"
+
+        lines = []
+        for i, (uid, stats) in enumerate(sorted_list[:10], 1):
+            member = await self._resolve_member(int(uid))
+            if member:
+                display = member.mention
+            else:
+                fallback_name = None
+                for e in records.get(str(uid), []):
                     if e.get("username"):
                         fallback_name = e["username"]
                         break
-            if not fallback_name:
-                try:
-                    user = await bot.fetch_user(uid_int)
-                    fallback_name = user.display_name
-                except:
-                    fallback_name = f"مستخدم {uid_int}"
-            display = f"**{fallback_name}** (غادر)"
+                if not fallback_name:
+                    try:
+                        user = await bot.fetch_user(int(uid))
+                        fallback_name = user.display_name
+                    except Exception:
+                        fallback_name = f"مستخدم {uid}"
+                display = f"**{fallback_name}** (غادر)"
+            lines.append(
+                f"{_medal(i)} **{i}.** {display}\n"
+                f"-# 💰 {self.currency}{stats.get('total_amount', 0):,.2f} • 📑 {stats.get('total_entries', 0)} فصل"
+            )
+        if not lines:
+            lines = ["*لا توجد بيانات كافية في هذا التصنيف بعد.*"]
+        return title, lines
 
-        medal = medals[i-1] if i-1 < len(medals) else "🏅"
-        if sort_by == "chapters":
-            detail = f"{stats_data['total_entries']} فصل"
+    async def build_children(self) -> list:
+        avatar = _bot_avatar()
+        if self.sort_by == "by_type" and self.current_type is None:
+            subtitle = "اختر التخصص ثم معيار الترتيب."
+            children: list = [
+                cards.header(["## 🏆 ترتيب الأعضاء", subtitle], avatar),
+                cards.sep(2),
+            ]
+            type_counts = self.stat_doc.get("type_counts", {})
+            if not type_counts:
+                children.append(cards.text("لا توجد تخصصات مسجلة بعد — الأرقام تظهر مع أول تسجيل."))
+            else:
+                options = [discord.SelectOption(label=cards.clamp(k.replace('_', ' ').title(), 100), value=k, emoji="📊")
+                           for k in list(type_counts.keys())[:25]]
+                children.append(cards.text("-# **الخطوة 1 من 2** — اختر التخصص لعرض أبطاله."))
+                children.append(cards.sep())
+                children.append(cards.make_select("اختر التخصص...", options, self._type_selected))
         else:
-            detail = f"{currency}{stats_data['total_amount']:,.2f}"
-        lines.append(f"{medal} **{i}.** {display}\n-# {detail}")
+            title, lines = await self._ranking_lines()
+            children: list = [
+                cards.header(["## 🏆 ترتيب الأعضاء", title], avatar),
+                cards.sep(2),
+                cards.text("\n".join(lines)),
+            ]
 
-    footnote = None
-    if len(top_items) < limit:
-        footnote = f"يوجد فقط {len(top_items)} أعضاء في التصنيف الحالي • سيتم تحديث الإحصائية تلقائياً."
+        options = [
+            discord.SelectOption(label="حسب إجمالي المبلغ", value="amount", emoji="💰",
+                                 description="ترتيب الأعضاء حسب قيمة أعمالهم"),
+            discord.SelectOption(label="حسب عدد الفصول", value="chapters", emoji="📑",
+                                 description="ترتيب الأعضاء حسب عدد الفصول"),
+            discord.SelectOption(label="حسب تخصص محدد", value="by_type", emoji="🛠️",
+                                 description="اختر تخصصًا ثم اعرض أبطاله"),
+        ]
+        children.append(cards.sep())
+        children.append(cards.make_select("تغيير معيار الترتيب...", options, self._filter_selected))
+        if self.back is not None:
+            children.append(cards.sep())
+            children.append(self._back_row())
+        return children
 
-    children: list = [
-        cards.header(["## " + title, f"**{len(top_items)}** أعضاء في التصنيف"], avatar),
-        cards.sep(2),
-        cards.text("\n\n".join(lines)),
-    ]
-    if footnote:
-        children += [cards.sep(), cards.text(f"-# {footnote}")]
-    children += [cards.sep(), cards.text(f"-# {cards.BOT_SIGNATURE}")]
-    return cards.Card(cards.ACCENT_GOLD, *children)
+    async def _filter_selected(self, interaction: discord.Interaction):
+        value = interaction.data['values'][0]
+        self.sort_by = value
+        self.current_type = None
+        await self.refresh(interaction)
+
+    async def _type_selected(self, interaction: discord.Interaction):
+        self.current_type = interaction.data['values'][0]
+        self.sort_by = "by_type"
+        await self.refresh(interaction)
 
 
 # ═══════════════════════════════════════════════════════════════
-# 📊 عارض الإحصائيات التفاعلي — أزرار الأقسام بنمط ZEUS
+# 👤 تفاصيل عضو دقيقة — تُفتح من قائمة /الأعضاء
+# ═══════════════════════════════════════════════════════════════
+class MemberDetailView(BackNav, ui.LayoutView):
+    """البطاقة الدقيقة الكاملة لعضو واحد: إجماليات، تفصيل أعمال بأشرطة،
+    تفصيل تخصصات، آخر السجلات — وصورة العضو في الرأس."""
+
+    def __init__(self, row, guild, currency, entries, back=None, focus_specialty=None):
+        super().__init__(timeout=600.0)
+        self.row = row
+        self.guild = guild
+        self.currency = currency or '$'
+        self.entries = entries
+        self.back = back
+        self.focus_specialty = focus_specialty
+        self.rebuild()
+
+    @classmethod
+    async def create(cls, row, guild, currency, back=None, focus_specialty=None):
+        records = await load_visible_records()
+        entries = records.get(row["user_id"], [])
+        if focus_specialty:
+            entries = [e for e in entries if e.get("work_type") == focus_specialty]
+        return cls(row, guild, currency, entries, back, focus_specialty)
+
+    def _blocks(self) -> str:
+        cur = self.currency
+        r = self.row
+        bonuses = sum(e.get("total", 0) for e in self.entries if e.get("work_type") == "مكافأة")
+        deductions = sum(abs(e.get("total", 0)) for e in self.entries if e.get("work_type") == "خصم")
+        work_entries = [e for e in self.entries if e.get("work_type") not in ("مكافأة", "خصم")]
+
+        # 1) الإجماليات
+        scope = "في التخصص المحدد" if self.focus_specialty else "منذ البداية"
+        totals = "\n".join([
+            "### 📊 الإجماليات " + f"({scope})" if self.focus_specialty else "### 📊 الإجماليات",
+            f"**📑 الفصول:** {r['chapters']} • **📚 الأعمال:** {r['works_count']} • **🧾 السجلات:** {len(self.entries)}",
+            f"**💰 قيمة الأعمال:** {cur}{r['total_works']:,.2f}",
+            f"**🎁 المكافآت:** {cur}{bonuses:,.2f} • **🔻 الخصومات:** {cur}{deductions:,.2f}",
+            f"**💵 الصافي النهائي:** {cur}{r['net_total']:,.2f}",
+        ])
+
+        blocks = [totals]
+
+        # 2) تفصيل الأعمال بأشرطة
+        works_stats = defaultdict(lambda: {"c": 0, "t": 0.0})
+        for e in work_entries:
+            s = works_stats[e.get("work_name", "غير محدد")]
+            s["c"] += 1
+            s["t"] += e.get("total", 0)
+        if works_stats:
+            max_c = max(s["c"] for s in works_stats.values())
+            lines = [f"• **{w}** — {cards.progress_bar(s['c'], max_c)} **{s['c']}** فصول — {cur}{s['t']:,.2f}"
+                     for w, s in sorted(works_stats.items(), key=lambda kv: -kv[1]["c"])]
+            blocks.append("### 📚 تفصيل الأعمال\n" + "\n".join(lines))
+
+        # 3) تفصيل التخصصات
+        types_stats = defaultdict(lambda: {"c": 0, "t": 0.0})
+        for e in work_entries:
+            s = types_stats[e.get("work_type", "غير محدد")]
+            s["c"] += 1
+            s["t"] += e.get("total", 0)
+        if types_stats:
+            max_c = max(s["c"] for s in types_stats.values())
+            lines = [f"• **{t.replace('_', ' ').title()}** — {cards.progress_bar(s['c'], max_c)} **{s['c']}** فصول — {cur}{s['t']:,.2f}"
+                     for t, s in sorted(types_stats.items(), key=lambda kv: -kv[1]["c"])]
+            blocks.append("### 🛠️ تفصيل التخصصات\n" + "\n".join(lines))
+
+        # 4) آخر السجلات (الأحدث أولًا)
+        recent = sorted([e for e in self.entries if entry_datetime(e)],
+                        key=lambda e: entry_datetime(e), reverse=True)[:5]
+        if recent:
+            lines = []
+            for e in recent:
+                dt = entry_datetime(e)
+                stamp = dt.strftime("%m-%d") if dt else ""
+                lines.append(f"• **فصل {e.get('chapter', '؟')}** — {e.get('work_name', '؟')} — "
+                             f"{e.get('work_type', '؟')} — {cur}{e.get('total', 0):.2f}"
+                             + (f"\n  -# {stamp}" if stamp else ""))
+            blocks.append("### 🕒 آخر السجلات\n" + "\n".join(lines))
+
+        return "\n\n".join(blocks)
+
+    def rebuild(self):
+        self.clear_items()
+        member = self.guild.get_member(int(self.row["user_id"])) if self.guild else None
+        avatar = _member_avatar(member)
+        who = member.mention if member else self.row["mention"]
+        title = ("🛠️ تفاصيل العضو في التخصص" if self.focus_specialty else "👤 تفاصيل العضو")
+        subtitle = (f"{who} — تخصص **{self.focus_specialty.replace('_', ' ').title()}**"
+                    if self.focus_specialty else who)
+        children: list = [
+            cards.header([f"## {title}", subtitle], avatar),
+            cards.sep(2),
+            cards.text(cards.clamp(self._blocks(), 3600)),
+        ]
+        if self.back is not None:
+            children += [cards.sep(), self._back_row("عودة إلى القائمة")]
+        children += [cards.sep(), cards.text(f"-# {cards.BOT_SIGNATURE}")]
+        self.add_item(cards.container(cards.ACCENT_GOLD, *children))
+
+
+# ═══════════════════════════════════════════════════════════════
+# 👥 /الأعضاء — القائمة المريحة: سطر واحد لكل عضو + اختيار عضو
+#   من القائمة المنسدلة يفتح تفاصيله الدقيقة.
+# ═══════════════════════════════════════════════════════════════
+class MembersHubView(BackNav, ui.LayoutView):
+    def __init__(self, rows, guild, currency, title="👥 الأعضاء والمستحقات",
+                 back=None, per_page=8, focus_specialty=None):
+        super().__init__(timeout=600.0)
+        self.rows = rows
+        self.guild = guild
+        self.currency = currency or '$'
+        self.title = title
+        self.back = back
+        self.per_page = per_page
+        self.focus_specialty = focus_specialty
+        self.page = 0
+        self.total_pages = max(1, (len(rows) + per_page - 1) // per_page)
+        self.rebuild()
+
+    def accent(self):
+        return cards.ACCENT_GOLD
+
+    def _summary_line(self) -> str:
+        total_net = sum(r["net_total"] for r in self.rows)
+        total_ch = sum(r["chapters"] for r in self.rows)
+        return f"**{len(self.rows)}** عضو • 📑 **{total_ch}** فصول • 💵 **{self.currency}{total_net:,.2f}**"
+
+    def _member_line(self, i, row) -> str:
+        member = self.guild.get_member(int(row["user_id"])) if self.guild else None
+        who = member.mention if member else f"**{row['display']}**"
+        return (f"{_medal(i)} **{i}.** {who}\n"
+                f"-# 📑 {row['chapters']} فصول • 📚 {row['works_count']} أعمال • 💵 **{self.currency}{row['net_total']:,.2f}**")
+
+    def _options(self):
+        start = self.page * self.per_page
+        page_rows = self.rows[start:start + self.per_page]
+        options = []
+        for row in page_rows:
+            member = self.guild.get_member(int(row["user_id"])) if self.guild else None
+            name = member.display_name if member else row["display"].lstrip('@')
+            options.append(discord.SelectOption(
+                label=cards.clamp(name, 100),
+                value=row["user_id"],
+                description=cards.clamp(
+                    f"📑 {row['chapters']} فصول • 💵 {self.currency}{row['net_total']:,.2f}", 100),
+                emoji="👤",
+            ))
+        return options
+
+    def rebuild(self):
+        self.clear_items()
+        children: list = [
+            cards.header([f"## {self.title}", self._summary_line()], _bot_avatar()),
+            cards.sep(2),
+        ]
+        start = self.page * self.per_page
+        page_rows = self.rows[start:start + self.per_page]
+        if page_rows:
+            blocks = [self._member_line(start + k, row) for k, row in enumerate(page_rows, 1)]
+            children.append(cards.text("\n".join(blocks)))
+            children.append(cards.sep())
+            children.append(cards.make_select(
+                "🔍 اختر عضواً لعرض تفاصيله الدقيقة...", self._options(), self._member_selected))
+        else:
+            children.append(cards.text("*لا يوجد أعضاء لعرضهم.*"))
+        if self.total_pages > 1:
+            children += [cards.sep(), cards.pager_row(self.page, self.total_pages, self._prev, self._next)]
+        if self.back is not None:
+            children += [cards.sep(), self._back_row("عودة إلى لوحة التحكم")]
+        children += [cards.sep(), cards.text(f"-# الترتيب حسب الصافي • {cards.BOT_SIGNATURE}")]
+        self.add_item(cards.container(self.accent(), *children))
+
+    async def refresh(self, interaction: discord.Interaction):
+        self.rebuild()
+        await interaction.response.edit_message(view=self)
+
+    async def _prev(self, interaction: discord.Interaction):
+        self.page = max(0, self.page - 1)
+        await self.refresh(interaction)
+
+    async def _next(self, interaction: discord.Interaction):
+        self.page = min(self.total_pages - 1, self.page + 1)
+        await self.refresh(interaction)
+
+    async def _member_selected(self, interaction: discord.Interaction):
+        uid = interaction.data['values'][0]
+        row = next((r for r in self.rows if r["user_id"] == uid), None)
+        if row is None:
+            await interaction.response.defer()
+            return
+        detail = await MemberDetailView.create(
+            row, self.guild, self.currency, back=self, focus_specialty=self.focus_specialty)
+        await interaction.response.edit_message(view=detail)
+
+
+class SpecialtyMembersView(MembersHubView):
+    """نفس قائمة الأعضاء لكن مركزة على تخصص واحد."""
+
+    def __init__(self, rows, guild, currency, specialty, back=None):
+        self.specialty = specialty
+        super().__init__(rows, guild, currency,
+                         title=f"🛠️ أعضاء تخصص: {specialty.replace('_', ' ').title()}",
+                         back=back, per_page=8, focus_specialty=specialty)
+
+    def _summary_line(self) -> str:
+        total_net = sum(r["net_total"] for r in self.rows)
+        total_ch = sum(r["chapters"] for r in self.rows)
+        return (f"**{len(self.rows)}** عضو • 📑 **{total_ch}** فصول في التخصص • "
+                f"💵 **{self.currency}{total_net:,.2f}**")
+
+    def _member_line(self, i, row) -> str:
+        member = self.guild.get_member(int(row["user_id"])) if self.guild else None
+        who = member.mention if member else f"**{row['display']}**"
+        return (f"{_medal(i)} **{i}.** {who}\n"
+                f"-# 📑 {row['chapters']} فصول في التخصص • 💵 **{self.currency}{row['net_total']:,.2f}**")
+
+
+# ═══════════════════════════════════════════════════════════════
+# 📊 عارض الإحصائيات التفاعلي — أزرار الأقسام
 # ═══════════════════════════════════════════════════════════════
 class StatsView(ui.LayoutView):
-    def __init__(self, stat_doc, bot_member, currency, guild: discord.Guild):
-        super().__init__(timeout=300.0)
+    def __init__(self, stat_doc, bot_member, currency, guild: discord.Guild, back=None):
+        super().__init__(timeout=600.0)
         self.stat_doc = stat_doc
         self.bot_member = bot_member
         self.currency = currency if currency else '$'
         self.guild = guild
+        self.back = back
         self.current_page = "overview"
         self.rebuild()
 
@@ -337,14 +671,28 @@ class StatsView(ui.LayoutView):
         )
 
     def _build_children(self) -> list:
-        avatar = self.bot_member.display_avatar.url
+        avatar = _member_avatar(self.bot_member)
         children: list = [
             cards.header(["## 📊 لوحة الإحصائيات", "مؤشرات الفريق الحية المحدثة تلقائيًا."], avatar),
             cards.sep(2),
         ]
         children += self._page_children()
         children += [cards.sep(), self._tabs_row()]
+        if self.back is not None:
+            children += [cards.sep(), cards.row(cards.secondary_btn("عودة إلى لوحة التحكم", self._back_cb, emoji="↩"))]
         return children
+
+    async def _back_cb(self, interaction: discord.Interaction):
+        parent = self.back
+        if callable(parent):
+            result = parent()
+            if hasattr(result, "__await__"):
+                result = await result
+            parent = result
+        if parent is None:
+            await interaction.response.defer()
+            return
+        await interaction.response.edit_message(view=parent)
 
     def _page_children(self) -> list:
         if self.current_page == "types":
@@ -352,7 +700,7 @@ class StatsView(ui.LayoutView):
         if self.current_page == "time":
             return self._time_body()
         if self.current_page == "top":
-            return []
+            return [cards.text("*اختر معيار الترتيب من القائمة أدناه.*")]
         return self._overview_body()
 
     def _overview_body(self):
@@ -373,7 +721,7 @@ class StatsView(ui.LayoutView):
         if not type_counts:
             return [cards.text("لا توجد بيانات تخصصات بعد.")]
         lines = []
-        for k, v in type_counts.items():
+        for k, v in sorted(type_counts.items(), key=lambda kv: -kv[1]):
             pct = (v / total_entries * 100) if total_entries else 0
             bar = cards.progress_bar(v, total_entries or 1)
             lines.append(f"**{k.replace('_',' ').title()}** — {bar} **{pct:.0f}%** ({v})")
@@ -389,8 +737,8 @@ class StatsView(ui.LayoutView):
             cards.text(
                 f"**📅 اليوم** — 📑 {daily['entries']} فصل • 💰 {self.currency}{daily['amount']:,.2f}\n"
                 f"**📆 الأسبوع** — 📑 {weekly['entries']} فصل • 💰 {self.currency}{weekly['amount']:,.2f}\n"
-                f"**📅 الشهر** — 📑 {monthly['entries']} فصل • 💰 {self.currency}{monthly['amount']:,.2f}\n"
-                f"**🌐 الإجمالي الكلي (منذ البداية)** — 📑 {total_entries} فصل • 💰 {self.currency}{total_amount:,.2f}"
+                f"**🗓️ الشهر** — 📑 {monthly['entries']} فصل • 💰 {self.currency}{monthly['amount']:,.2f}\n"
+                f"**🌐 الإجمالي الكلي** — 📑 {total_entries} فصل • 💰 {self.currency}{total_amount:,.2f}"
             ),
             cards.sep(),
             cards.text("-# إحصائيات تراكمية لنفس اليوم / الأسبوع / الشهر."),
@@ -410,98 +758,213 @@ class StatsView(ui.LayoutView):
         await self.refresh(interaction)
 
     async def _enter_top_mode(self, interaction: discord.Interaction):
-        top = await StatsTopView.create(self.stat_doc, self.guild, self.currency, stat_view=self)
+        top = await TopView.create(self.stat_doc, self.guild, self.currency, back=self)
         await interaction.response.edit_message(view=top)
 
 
-class StatsTopView(ui.LayoutView):
-    """عارض مستقل لقسم الأفضل داخل /احصائيات و /توب (قائمة تصنيف + عودة)."""
-
-    def __init__(self, stat_doc, guild: discord.Guild, currency, stat_view: StatsView | None = None):
-        super().__init__(timeout=300.0)
-        self.stat_doc = stat_doc
+# ═══════════════════════════════════════════════════════════════
+# 🛠️ اختيار التخصص من لوحة التحكم
+# ═══════════════════════════════════════════════════════════════
+class SpecialtyPickView(BackNav, ui.LayoutView):
+    def __init__(self, guild: discord.Guild, back=None):
+        super().__init__(timeout=600.0)
         self.guild = guild
-        self.currency = currency if currency else '$'
-        self.stat_view = stat_view
-        self.sort_by = "amount"
-        self.current_type = None
+        self.back = back
+        self.rebuild()
+
+    def rebuild(self):
+        self.clear_items()
+        options = [
+            discord.SelectOption(label=cards.clamp(s.replace('_', ' ').title(), 100), value=s, emoji="🛠️")
+            for s in sorted(PRICES.keys())
+        ]
+        children: list = [
+            cards.header(["## 🛠️ أعضاء تخصص",
+                          "اختر التخصص لعرض أعضائه ومستحقاتهم فيه مرتبين حسب الفصول."], _bot_avatar()),
+            cards.sep(2),
+        ]
+        if options:
+            children.append(cards.text(f"**🛠️ التخصصات المعتمدة حاليًا:** {len(options)}"))
+            children.append(cards.sep())
+            children.append(cards.make_select("اختر التخصص...", options, self._picked))
+        else:
+            children.append(cards.text("لا توجد تخصصات مفعّلة بعد — يضيفها المشرفون من /اضافة_تخصص."))
+        if self.back is not None:
+            children += [cards.sep(), self._back_row("عودة إلى لوحة التحكم")]
+        children += [cards.sep(), cards.text(f"-# {cards.BOT_SIGNATURE}")]
+        self.add_item(cards.container(cards.ACCENT_GOLD, *children))
+
+    async def _picked(self, interaction: discord.Interaction):
+        specialty = interaction.data['values'][0]
+        await interaction.response.defer()
+        try:
+            records = await load_visible_records()
+            filtered = {}
+            for uid, entries in records.items():
+                matched = [e for e in entries if e.get("work_type") == specialty]
+                if matched:
+                    filtered[uid] = matched
+            if not filtered:
+                await interaction.message.edit(view=cards.info_card(
+                    "📭 لا يوجد أعضاء", [f"لا يوجد أعضاء مسجلون في تخصص `{specialty}`."],
+                    avatar_url=_bot_avatar()))
+                return
+            rows = _build_member_finance_rows(filtered, self.guild)
+            rows.sort(key=lambda row: (row["chapters"], row["net_total"]), reverse=True)
+            view = SpecialtyMembersView(rows, self.guild, SETTINGS.get('currency', '$'),
+                                        specialty, back=self.back)
+            await interaction.message.edit(view=view)
+        except Exception as e:
+            await interaction.message.edit(view=cards.error_card(
+                "❌ تعذر فتح القسم", [f"`{str(e)[:200]}`"], avatar_url=_bot_avatar()))
+
+
+# ═══════════════════════════════════════════════════════════════
+# 🖥️ لوحة التحكم — كل زر ينفّذ أمره مباشرة في مكان اللوحة
+# ═══════════════════════════════════════════════════════════════
+class DashboardView(ui.LayoutView):
+    def __init__(self, guild: discord.Guild, user):
+        super().__init__(timeout=900.0)
+        self.guild = guild
+        self.user = user
 
     @classmethod
-    async def create(cls, stat_doc, guild: discord.Guild, currency, stat_view: StatsView | None = None):
-        self = cls(stat_doc, guild, currency, stat_view)
+    async def create(cls, guild: discord.Guild, user):
+        self = cls(guild, user)
         await self.rebuild_async()
         return self
 
     async def rebuild_async(self):
         self.clear_items()
-        children = await self._children()
-        children.append(cards.sep())
-        children.append(cards.text(f"-# {cards.BOT_SIGNATURE}"))
+        children = await self.build_children()
         self.add_item(cards.container(cards.ACCENT_GOLD, *children))
 
-    async def refresh(self, interaction: discord.Interaction):
-        await self.rebuild_async()
-        await interaction.response.edit_message(view=self)
+    async def _as_back(self):
+        """مصنع عودة حي: يبني لوحة جديدة ببيانات محدثة."""
+        return await DashboardView.create(self.guild, self.user)
 
-    async def _filter_selected(self, interaction: discord.Interaction):
-        value = interaction.data['values'][0]
-        if value == "by_type":
-            self.sort_by = "by_type"
-            self.current_type = None
-        else:
-            self.sort_by = value
-            self.current_type = None
-        await self.refresh(interaction)
+    def _swap(self, factory):
+        """مصنع أزرار تُنفّذ: يؤجل التفاعل، يبني القسم، ثم يحرر البطاقة في مكانها."""
+        async def callback(interaction: discord.Interaction):
+            await interaction.response.defer()
+            try:
+                child = await factory()
+                await interaction.message.edit(view=child)
+            except Exception as e:
+                try:
+                    await interaction.message.edit(view=cards.error_card(
+                        "❌ تعذر فتح القسم", [f"حدث خطأ:\n`{str(e)[:200]}`"], avatar_url=_bot_avatar()))
+                except Exception:
+                    pass
+        return callback
 
-    async def _type_selected(self, interaction: discord.Interaction):
-        self.current_type = interaction.data['values'][0]
-        self.sort_by = "by_type"
-        await self.refresh(interaction)
+    async def _open_members(self):
+        records = await load_visible_records()
+        rows = _build_member_finance_rows(records, self.guild)
+        if not rows:
+            return cards.info_card("📭 لا يوجد أعضاء",
+                                   ["لا توجد سجلات أعضاء بعد — يبدأ العد بأول /تسجيل."],
+                                   avatar_url=_bot_avatar())
+        return MembersHubView(rows, self.guild, SETTINGS.get('currency', '$'),
+                              title="👥 الأعضاء والمستحقات", back=self._as_back)
 
-    async def _back(self, interaction: discord.Interaction):
-        if self.stat_view is not None:
-            self.stat_view.current_page = "overview"
-            await self.stat_view.refresh(interaction)
-        else:
-            self.sort_by = "amount"
-            self.current_type = None
-            await self.refresh(interaction)
+    async def _open_top(self):
+        stat_doc = await stats_collection.find_one({"_id": "stats"}) or {}
+        return await TopView.create(stat_doc, self.guild, SETTINGS.get('currency', '$'), back=self._as_back)
 
-    async def _children(self) -> list:
+    async def _open_stats(self):
+        stat_doc = await stats_collection.find_one({"_id": "stats"})
+        if not stat_doc:
+            return cards.info_card("📭 لا توجد إحصائيات",
+                                   ["لا توجد إحصائيات بعد."], avatar_url=_bot_avatar())
+        return StatsView(stat_doc, self.guild.me, SETTINGS.get('currency', '$'),
+                         self.guild, back=self._as_back)
+
+    async def _open_payment(self):
+        rows, details = await build_payment_rows(self.guild)
+        if not rows:
+            return cards.info_card("📭 لا توجد سجلات",
+                                   ["لا توجد أي سجلات لهذا الشهر."], avatar_url=_bot_avatar())
+        return PaymentReportPaginator(rows, details, self.guild,
+                                      SETTINGS.get('currency', '$'), back=self._as_back)
+
+    async def _open_specialty(self):
+        return SpecialtyPickView(self.guild, back=self._as_back)
+
+    async def _open_monthly(self):
+        records = await load_visible_records()
+        entries = records.get(str(self.user.id), [])
+        # الطوابع الزمنية في السجلات naive UTC — نطابقها لتجنب خطأ المقارنة
+        month_start = datetime.utcnow().replace(day=1)
+        month_entries = [e for e in entries
+                         if (dt := entry_datetime(e)) is not None and dt >= month_start]
+        if not month_entries:
+            return cards.info_card("📭 لا يوجد عمل هذا الشهر",
+                                   [f"لا يوجد عمل مسجل لك <@{self.user.id}> منذ بداية الشهر."],
+                                   avatar_url=_bot_avatar())
+        return build_monthly_summary_card(self.user, month_entries,
+                                          SETTINGS.get('currency', '$'), _bot_avatar())
+
+    async def build_children(self) -> list:
         avatar = _bot_avatar()
-        children: list = [
-            cards.header(["## 🏆 ترتيب الأعضاء", "اختر معيار التصنيف من القائمة."], avatar),
-            cards.sep(2),
-        ]
-        if self.sort_by == "by_type" and self.current_type is None:
-            type_counts = self.stat_doc.get("type_counts", {})
-            if not type_counts:
-                children.append(cards.text("لا توجد بيانات تخصصات."))
-            else:
-                options = [discord.SelectOption(label=cards.clamp(k.replace('_',' ').title(), 100), value=k, emoji="📊")
-                           for k in list(type_counts.keys())[:25]]
-                children.append(cards.text("-# اختر التخصص لعرض أفضل الأعضاء فيه."))
-                children.append(cards.sep())
-                children.append(cards.make_select("اختر التخصص...", options, self._type_selected))
-        else:
-            card_built = await build_top_card(self.guild, self.currency, self.stat_doc,
-                                              self.sort_by, self.current_type)
-            # استخراج محتوى البطاقة المبنية وإعادة استخدام عناصرها النصية
-            container = card_built.children[0]
-            for child in container.children:
-                if isinstance(child, (ui.TextDisplay, ui.Section, ui.Separator, ui.ActionRow)):
-                    children.append(child)
+        currency = SETTINGS.get('currency', '$') or '$'
+        records = await load_visible_records()
+        rows = _build_member_finance_rows(records, self.guild)
+        works = await load_works()
+        isolated_count = len(get_isolated_work_names(works))
+        total_chapters = sum(r["chapters"] for r in rows)
+        total_net = sum(r["net_total"] for r in rows)
+        stat_doc = await stats_collection.find_one({"_id": "stats"}) or {}
+        monthly = stat_doc.get("monthly", {"entries": 0, "amount": 0})
 
-        options = [
-            discord.SelectOption(label="الأفضل عاماً (إجمالي المبلغ)", value="amount", emoji="💰"),
-            discord.SelectOption(label="الأفضل في الفصول (العدد)", value="chapters", emoji="📑"),
-            discord.SelectOption(label="الأفضل في تخصص...", value="by_type", emoji="📊"),
+        notify_channel = SETTINGS.get('notify_channel_id')
+        backup_channel = SETTINGS.get('daily_backup_channel_id')
+        payment_day = SETTINGS.get("payment_day")
+
+        if rows:
+            preview = "\n".join(
+                f"{_medal(k)} {r['mention']} — 💵 **{currency}{r['net_total']:,.2f}** • 📑 {r['chapters']}"
+                for k, r in enumerate(rows[:3], 1))
+        else:
+            preview = "• لا توجد بيانات بعد."
+
+        body = "\n".join([
+            "### 📊 نبضة السيرفر",
+            f"**👥 الأعضاء:** {len(rows)} • **📑 الفصول المحتسبة:** {total_chapters}",
+            f"**💵 إجمالي المستحقات:** {currency}{total_net:,.2f}",
+            f"**📆 هذا الشهر:** 📑 {monthly.get('entries', 0)} فصل • 💵 {currency}{monthly.get('amount', 0):,.2f}",
+            f"**⏸️ أعمال معزولة:** {isolated_count}",
+            "",
+            "### 🥇 صدارة الأعضاء",
+            preview,
+            "",
+            "### ⚙️ الإعدادات الحالية",
+            f"**💰 العملة:** {currency} • **⚠️ حد التنبيه:** {currency}{SETTINGS.get('alert_threshold', 10):.2f}",
+            f"**🔔 الإشعارات:** {('<#' + str(notify_channel) + '>') if notify_channel else 'غير محدد'} • "
+            f"**💾 النسخ الاحتياطي:** {('<#' + str(backup_channel) + '>') if backup_channel else 'غير محدد'}",
+            "**📅 موعد الدفع:** " + (f"يوم {payment_day} الساعة {SETTINGS.get('payment_hour', 0)}:00"
+                                     if payment_day else "غير محدد"),
+        ])
+
+        return [
+            cards.header(["## 🖥️ لوحة التحكم",
+                          f"<@{self.user.id}> — كل الأدوات بضغطة زر، والأزرار **تُنفّذ مباشرة**."], avatar),
+            cards.sep(2),
+            cards.text(cards.clamp(body, 3500)),
+            cards.sep(),
+            cards.row(
+                cards.secondary_btn("👥 الأعضاء", self._swap(self._open_members)),
+                cards.secondary_btn("🏆 التوب", self._swap(self._open_top)),
+                cards.secondary_btn("📊 الإحصائيات", self._swap(self._open_stats)),
+            ),
+            cards.row(
+                cards.success_btn("💳 تقرير الدفع", self._swap(self._open_payment)),
+                cards.secondary_btn("🛠️ أعضاء تخصص", self._swap(self._open_specialty)),
+                cards.success_btn("📆 ملخص شهري", self._swap(self._open_monthly)),
+            ),
+            cards.sep(),
+            cards.text(f"-# {cards.BOT_SIGNATURE}"),
         ]
-        children.append(cards.sep())
-        children.append(cards.make_select("اختر معيار التصنيف...", options, self._filter_selected))
-        children.append(cards.sep())
-        children.append(cards.row(cards.secondary_btn("عودة", self._back, emoji="↩")))
-        return children
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -510,7 +973,7 @@ class StatsTopView(ui.LayoutView):
 @bot.tree.command(name="الأعمال", description="عرض جميع الأعمال والاعضاء")
 @app_commands.checks.cooldown(1, 5, key=lambda i: (i.user.id, i.command.qualified_name))
 async def projects_report(interaction: discord.Interaction):
-    if interaction.channel.name not in SETTINGS.get("allowed_channels", []):
+    if not channel_allowed(interaction):
         await interaction.response.send_message(
             view=cards.channel_card(SETTINGS.get("allowed_channels", []), _bot_avatar()), ephemeral=True)
         return
@@ -526,7 +989,7 @@ async def projects_report(interaction: discord.Interaction):
 
 
 # ═══════════════════════════════════════════════════════════════
-# 2️⃣ إحصائيات (نظام تفاعلي كامل)
+# 2️⃣ احصائيات (نظام تفاعلي كامل)
 # ═══════════════════════════════════════════════════════════════
 @bot.tree.command(name="احصائيات", description="عرض إحصائيات متقدمة")
 @app_commands.checks.cooldown(1, 5, key=lambda i: (i.user.id, i.command.qualified_name))
@@ -537,33 +1000,28 @@ async def stats(interaction: discord.Interaction):
             "📭 لا توجد إحصائيات", ["لا توجد إحصائيات بعد."], avatar_url=_bot_avatar()), ephemeral=True)
         return
 
-    bot_member = interaction.guild.me
-    currency = SETTINGS.get('currency', '$') or '$'
-    view = StatsView(stat_doc, bot_member, currency, interaction.guild)
+    view = StatsView(stat_doc, interaction.guild.me, SETTINGS.get('currency', '$'),
+                     interaction.guild)
     await interaction.response.send_message(view=view)
 
 
 # ═══════════════════════════════════════════════════════════════
-# 2.5️⃣ /توب (ترتيب الأعضاء المستقل)
+# 2.5️⃣ /توب (ترتيب الأعضاء المستقل) — مُصلح بالكامل
 # ═══════════════════════════════════════════════════════════════
 @bot.tree.command(name="توب", description="عرض ترتيب الأعضاء حسب معايير مختلفة")
 @app_commands.checks.cooldown(1, 5, key=lambda i: (i.user.id, i.command.qualified_name))
 async def top_members(interaction: discord.Interaction):
-    stat_doc = await stats_collection.find_one({"_id": "stats"})
-    if not stat_doc:
-        await interaction.response.send_message(view=cards.info_card(
-            "📭 لا توجد بيانات", ["لا توجد بيانات إحصائية بعد."], avatar_url=_bot_avatar()), ephemeral=True)
-        return
-
+    stat_doc = await stats_collection.find_one({"_id": "stats"}) or {}
     currency = SETTINGS.get('currency', '$') or '$'
-    view = StatsTopView(stat_doc, interaction.guild, currency, stat_view=None)
+    # ⚠️ create() تبني البطاقة كاملة قبل الإرسال — لا رسائل فارغة أبدًا
+    view = await TopView.create(stat_doc, interaction.guild, currency, back=None)
     await interaction.response.send_message(view=view)
 
 
 # ═══════════════════════════════════════════════════════════════
-# 2.7️⃣ /الأعضاء + /اعضاء_تخصص
+# 2.7️⃣ /الأعضاء + /اعضاء_تخصص — القائمة المريحة + التفاصيل الدقيقة
 # ═══════════════════════════════════════════════════════════════
-@bot.tree.command(name="الأعضاء", description="عرض جميع الأعضاء المسجلين مع أموالهم وسجلاتهم")
+@bot.tree.command(name="الأعضاء", description="قائمة الأعضاء ومستحقاتهم مع تفاصيل دقيقة لكل عضو")
 @app_commands.describe(بحث="بحث اختياري باسم العضو أو معرفه")
 @app_commands.checks.cooldown(1, 5, key=lambda i: (i.user.id, i.command.qualified_name))
 async def registered_members(interaction: discord.Interaction, بحث: str = None):
@@ -578,10 +1036,10 @@ async def registered_members(interaction: discord.Interaction, بحث: str = Non
         await interaction.response.send_message(view=cards.info_card(
             "📭 لا توجد نتائج", ["لا توجد نتائج مطابقة للأعضاء المسجلين."], avatar_url=_bot_avatar()), ephemeral=True)
         return
-    title = "👥 الأعضاء المسجلون والمستحقات"
+    title = "👥 الأعضاء والمستحقات"
     if بحث:
         title += f" • بحث: {بحث}"
-    view = MembersFinancePaginator(rows, interaction.guild, SETTINGS.get('currency', '$'), title)
+    view = MembersHubView(rows, interaction.guild, SETTINGS.get('currency', '$'), title)
     await interaction.response.send_message(view=view)
 
 
@@ -608,7 +1066,7 @@ async def specialty_members(interaction: discord.Interaction, التخصص: str)
         await interaction.response.send_message(view=cards.info_card(
             "📭 لا يوجد أعضاء", [f"لا يوجد أعضاء مسجلون في تخصص `{specialty}`."], avatar_url=_bot_avatar()), ephemeral=True)
         return
-    view = SpecialtyMembersPaginator(rows, interaction.guild, SETTINGS.get('currency', '$'), specialty)
+    view = SpecialtyMembersView(rows, interaction.guild, SETTINGS.get('currency', '$'), specialty)
     await interaction.response.send_message(view=view)
 
 
@@ -618,7 +1076,7 @@ async def specialty_members(interaction: discord.Interaction, التخصص: str)
 @bot.tree.command(name="أعمالي", description="عرض أعمالك مجمعة مع المكافآت والخصومات")
 @app_commands.checks.cooldown(1, 5, key=lambda i: (i.user.id, i.command.qualified_name))
 async def my_works_slash(interaction: discord.Interaction):
-    if interaction.channel.name not in SETTINGS.get("allowed_channels", []):
+    if not channel_allowed(interaction):
         await interaction.response.send_message(
             view=cards.channel_card(SETTINGS.get("allowed_channels", []), _bot_avatar()), ephemeral=True)
         return
@@ -627,7 +1085,8 @@ async def my_works_slash(interaction: discord.Interaction):
     user_id = str(interaction.user.id)
     if user_id not in records or not records[user_id]:
         await interaction.response.send_message(view=cards.info_card(
-            "📭 ليس لديك أي شغل", ["لم تسجل أي فصول بعد — ابدأ بأمر /تسجيل."], avatar_url=_bot_avatar()), ephemeral=True)
+            "📭 ليس لديك أي شغل", ["لم تسجل أي فصول بعد — ابدأ بأمر /تسجيل."],
+            avatar_url=_member_avatar(interaction.user)), ephemeral=True)
         return
 
     works, bonuses, deductions = _categorize_records(records[user_id])
@@ -662,12 +1121,12 @@ async def my_works_text(ctx):
 
 
 # ═══════════════════════════════════════════════════════════════
-# 4️⃣ شغل
+# 4️⃣ شغل — الصورة المصغرة لصورة العضو المعنيّ دائمًا
 # ═══════════════════════════════════════════════════════════════
 @bot.tree.command(name="شغل", description="عرض شغل عضو مجمّع مع المكافآت والخصومات")
 @app_commands.checks.cooldown(1, 5, key=lambda i: (i.user.id, i.command.qualified_name))
 async def show_work_slash(interaction: discord.Interaction, member: discord.Member = None):
-    if interaction.channel.name not in SETTINGS.get("allowed_channels", []):
+    if not channel_allowed(interaction):
         await interaction.response.send_message(
             view=cards.channel_card(SETTINGS.get("allowed_channels", []), _bot_avatar()), ephemeral=True)
         return
@@ -676,8 +1135,9 @@ async def show_work_slash(interaction: discord.Interaction, member: discord.Memb
     records = await load_visible_records()
     user_id = str(target.id)
     if user_id not in records or not records[user_id]:
-        await interaction.response.send_message(view=cards.info_card(
-            "📭 لا يوجد شغل", [f"لا يوجد شغل للعضو {target.mention}."], avatar_url=_bot_avatar()), ephemeral=True)
+        await interaction.response.send_message(view=cards.error_card(
+            "📭 لا يوجد شغل", [f"لا يوجد شغل مسجل للعضو {target.mention}."],
+            avatar_url=_member_avatar(target)), ephemeral=True)
         return
 
     works, bonuses, deductions = _categorize_records(records[user_id])
@@ -776,113 +1236,9 @@ def _build_member_finance_rows(records, guild, search: str = None):
 
 
 # ═══════════════════════════════════════════════════════════════
-# 📄 مُصفّحات الأعضاء — بطاقات بتنقل ZEUS
+# 5️⃣ لوحة التحكم — أزرار تنفّذ لا أزرار توجّه
 # ═══════════════════════════════════════════════════════════════
-class MembersFinancePaginator(ui.LayoutView):
-    def __init__(self, rows, guild, currency, title="👥 الأعضاء والمستحقات", per_page=6):
-        super().__init__(timeout=300.0)
-        self.rows = rows
-        self.guild = guild
-        self.currency = currency or '$'
-        self.title = title
-        self.per_page = per_page
-        self.current_page = 0
-        self.total_pages = max(1, (len(rows) + per_page - 1) // per_page)
-        self.rebuild()
-
-    def accent(self):
-        return cards.ACCENT_GOLD
-
-    def _row_block(self, index, row) -> str:
-        works_preview = "، ".join(f"{name} ({count})" for name, count, _total in row["work_counts"][:3]) or "لا توجد أعمال"
-        if len(row["work_counts"]) > 3:
-            works_preview += f"، +{len(row['work_counts']) - 3}"
-        return (
-            f"**{index}. {row['display']}**\n"
-            f"{row['mention']}\n"
-            f"-# 📑 الفصول: **{row['chapters']}** | السجلات: **{row['records']}** | الأعمال: **{row['works_count']}**\n"
-            f"-# 💰 الأعمال: {self.currency}{row['total_works']:.2f} | 🎁 مكافآت: {self.currency}{row['bonuses']:.2f} | 🔻 خصومات: {self.currency}{row['deductions']:.2f}\n"
-            f"-# 💵 الصافي: **{self.currency}{row['net_total']:.2f}**\n"
-            f"-# 📚 أبرز الأعمال: {works_preview}"
-        )
-
-    def _summary_line(self) -> str:
-        total_amount = sum(row["net_total"] for row in self.rows)
-        total_chapters = sum(row["chapters"] for row in self.rows)
-        return (f"**عدد الأعضاء:** {len(self.rows)} • **الفصول المحتسبة:** {total_chapters}"
-                f" • **الصافي:** {self.currency}{total_amount:.2f}")
-
-    def _footnote(self) -> str | None:
-        return "الأعمال المعزولة مستبعدة من هذه الأرقام تلقائياً."
-
-    def _body(self) -> list:
-        start = self.current_page * self.per_page
-        page_rows = self.rows[start:start + self.per_page]
-        blocks = [self._row_block(index, row) for index, row in enumerate(page_rows, start + 1)]
-        return [cards.text(cards.clamp("\n\n".join(blocks), 3400))]
-
-    def rebuild(self):
-        self.clear_items()
-        avatar = _bot_avatar()
-        children: list = [
-            cards.header([f"## {self.title}", self._summary_line()], avatar),
-            cards.sep(2),
-        ]
-        children += self._body()
-        footnote = self._footnote()
-        if footnote:
-            children += [cards.sep(), cards.text(f"-# {footnote}")]
-        if self.total_pages > 1:
-            children += [cards.sep(), cards.pager_row(self.current_page, self.total_pages,
-                                                      self.previous_page, self.next_page)]
-        children += [cards.sep(), cards.text(f"-# {cards.BOT_SIGNATURE}")]
-        self.add_item(cards.container(self.accent(), *children))
-
-    async def refresh(self, interaction: discord.Interaction):
-        self.rebuild()
-        await interaction.response.edit_message(view=self)
-
-    async def previous_page(self, interaction: discord.Interaction):
-        self.current_page = max(0, self.current_page - 1)
-        await self.refresh(interaction)
-
-    async def next_page(self, interaction: discord.Interaction):
-        self.current_page = min(self.total_pages - 1, self.current_page + 1)
-        await self.refresh(interaction)
-
-
-class SpecialtyMembersPaginator(MembersFinancePaginator):
-    def __init__(self, rows, guild, currency, specialty, per_page=7):
-        self.specialty = specialty
-        super().__init__(rows, guild, currency, f"🛠️ أعضاء تخصص: {specialty}", per_page)
-
-    def accent(self):
-        return cards.ACCENT_GOLD
-
-    def _row_block(self, index, row) -> str:
-        works_preview = "، ".join(f"{name} ({count})" for name, count, _total in row["work_counts"][:4]) or "لا توجد أعمال"
-        return (
-            f"**{index}. {row['display']}**\n"
-            f"{row['mention']}\n"
-            f"-# 📑 فصول التخصص: **{row['chapters']}** | 📚 الأعمال: **{row['works_count']}**\n"
-            f"-# 💵 المستحق: **{self.currency}{row['net_total']:.2f}**\n"
-            f"-# 📖 الأعمال: {works_preview}"
-        )
-
-    def _summary_line(self) -> str:
-        total_amount = sum(row["net_total"] for row in self.rows)
-        total_chapters = sum(row["chapters"] for row in self.rows)
-        return (f"**عدد الأعضاء:** {len(self.rows)} • **الفصول:** {total_chapters}"
-                f" • **الإجمالي:** {self.currency}{total_amount:.2f}")
-
-    def _footnote(self) -> str | None:
-        return "مرتّب من الأكثر فصولاً إلى الأقل • الأعمال المعزولة مستبعدة."
-
-
-# ═══════════════════════════════════════════════════════════════
-# 5️⃣ لوحة التحكم
-# ═══════════════════════════════════════════════════════════════
-@bot.tree.command(name="لوحة_التحكم", description="لوحة تحكم للمشرفين")
+@bot.tree.command(name="لوحة_التحكم", description="لوحة تحكم تفاعلية للمشرفين — الأزرار تُنفّذ مباشرة")
 @app_commands.checks.cooldown(1, 5, key=lambda i: (i.user.id, i.command.qualified_name))
 async def dashboard(interaction: discord.Interaction):
     if not is_admin(interaction):
@@ -890,72 +1246,8 @@ async def dashboard(interaction: discord.Interaction):
         await interaction.response.send_message(view=cards.permission_card(_bot_avatar()), ephemeral=True)
         return
 
-    avatar = _bot_avatar()
-    records = await load_visible_records()
-    total_users = len(records)
-    total_entries = sum(len(entries) for entries in records.values())
-    total_amount = sum(sum(e.get("total", 0) for e in entries) for entries in records.values())
-    currency = SETTINGS.get('currency', '$') or '$'
-    member_rows = _build_member_finance_rows(records, interaction.guild)
-    top_members_preview = "\n".join(
-        f"• {row['mention']} — {row['chapters']} فصول — {currency}{row['net_total']:.2f}"
-        for row in member_rows[:5]
-    ) or "لا توجد بيانات أعضاء."
-    isolated_count = len(get_isolated_work_names(await load_works()))
-    notify_channel = SETTINGS.get('notify_channel_id')
-    backup_channel = SETTINGS.get('daily_backup_channel_id')
-    payment_day = SETTINGS.get("payment_day")
-
-    children: list = [
-        cards.header(["## 🖥️ لوحة التحكم الرئيسية",
-                      f"<@{interaction.user.id}> — مركز إدارة شامل للمشرفين."], avatar),
-        cards.sep(2),
-        cards.text(
-            f"**👥 الأعضاء النشطون:** {total_users}\n"
-            f"**📄 عدد السجلات الكلي:** {total_entries}\n"
-            f"**💰 إجمالي المبالغ:** {currency}{total_amount:.2f}"
-        ),
-        cards.sep(),
-        cards.text(
-            f"**⚙️ العملة:** {currency}\n"
-            f"**🔔 قناة الإشعارات:** {('<#' + str(notify_channel) + '>') if notify_channel else 'غير محدد'}\n"
-            f"**💾 قناة النسخ الاحتياطي:** {('<#' + str(backup_channel) + '>') if backup_channel else 'غير محدد'}\n"
-            f"**⚠️ حد التنبيه:** {currency}{SETTINGS.get('alert_threshold', 10):.2f}\n"
-            f"**📅 موعد الدفع الشهري:** " +
-            (f"يوم {payment_day} الساعة {SETTINGS.get('payment_hour', 0)}:00" if payment_day else "غير محدد")
-        ),
-        cards.sep(),
-        cards.text(f"**👥 أعلى الأعضاء حالياً**\n{top_members_preview}"),
-        cards.sep(),
-        cards.text(
-            "**⏸️ الأعمال المعزولة**\n" +
-            (f"{isolated_count} عمل مستبعد من الحسابات الظاهرة." if isolated_count else "لا يوجد أعمال معزولة.")
-        ),
-        cards.sep(),
-        cards.row(
-            cards.make_button("👥 قائمة الأعضاء", style=discord.ButtonStyle.secondary, callback=_quick_members),
-            cards.make_button("💳 تقرير الدفع", style=discord.ButtonStyle.success, callback=_quick_payment),
-            cards.make_button("🛠️ أعضاء تخصص", style=discord.ButtonStyle.secondary, callback=_quick_specialty),
-        ),
-        cards.sep(),
-        cards.text(f"-# {cards.BOT_SIGNATURE}"),
-    ]
-    await interaction.response.send_message(view=cards.Card(cards.ACCENT_GOLD, *children))
-
-
-async def _quick_members(interaction: discord.Interaction):
-    await interaction.response.send_message(
-        "استخدم الأمر `/الأعضاء` لعرض كل الأعضاء والمستحقات مع الصفحات والبحث.", ephemeral=True)
-
-
-async def _quick_payment(interaction: discord.Interaction):
-    await interaction.response.send_message(
-        "استخدم الأمر `/تقرير_دفع` لمراجعة تقرير الدفع الشهري وتصديره.", ephemeral=True)
-
-
-async def _quick_specialty(interaction: discord.Interaction):
-    await interaction.response.send_message(
-        "استخدم الأمر `/اعضاء_تخصص` ثم اختر التخصص المطلوب لمراجعة أعضائه قبل الصرف.", ephemeral=True)
+    view = await DashboardView.create(interaction.guild, interaction.user)
+    await interaction.response.send_message(view=view)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1003,27 +1295,32 @@ async def my_weekly_report(interaction: discord.Interaction):
     user_id = str(interaction.user.id)
     if user_id not in records:
         await interaction.response.send_message(view=cards.info_card(
-            "📭 لا توجد سجلات", ["ليس لديك أي سجلات."], avatar_url=_bot_avatar()), ephemeral=True)
+            "📭 لا توجد سجلات", ["ليس لديك أي سجلات."], avatar_url=_member_avatar(interaction.user)), ephemeral=True)
         return
 
     week_ago = datetime.utcnow() - timedelta(days=7)
     week_entries = [
         e for e in records[user_id]
-        if "timestamp" in e and datetime.fromisoformat(e["timestamp"]) > week_ago
+        if (dt := entry_datetime(e)) is not None and dt > week_ago
     ]
     if not week_entries:
         await interaction.response.send_message(view=cards.info_card(
-            "📭 لا يوجد نشاط", ["لا يوجد فصول خلال الأسبوع الماضي."], avatar_url=_bot_avatar()), ephemeral=True)
+            "📭 لا يوجد نشاط", ["لا يوجد فصول خلال الأسبوع الماضي."],
+            avatar_url=_member_avatar(interaction.user)), ephemeral=True)
         return
 
     total = sum(e.get("total", 0) for e in week_entries)
     currency = SETTINGS.get('currency', '$') or '$'
+    works_count = defaultdict(int)
+    for e in week_entries:
+        works_count[e.get("work_name", "غير محدد")] += 1
+    breakdown = "\n".join(f"• **{w}:** {c} فصول" for w, c in sorted(works_count.items(), key=lambda kv: -kv[1]))
     children: list = [
-        cards.header(["## 📅 تقريرك الأسبوعي", f"<@{interaction.user.id}>"], _bot_avatar()),
+        cards.member_header(["## 📅 تقريرك الأسبوعي", f"<@{interaction.user.id}>"], interaction.user),
         cards.sep(2),
         cards.text(
-            f"**عدد المهام:** {len(week_entries)}\n"
-            f"**المجموع:** {currency}{total:.2f}"
+            f"### 📊 الحصيلة\n**المهام:** {len(week_entries)} • **المجموع:** {currency}{total:,.2f}\n\n"
+            f"### 📚 التفصيل\n{breakdown}"
         ),
         cards.sep(),
         cards.text(f"-# آخر 7 أيام • {cards.BOT_SIGNATURE}"),
@@ -1041,7 +1338,7 @@ async def edit_last(interaction: discord.Interaction,
                     الفصل: str = None,
                     التخصص: str = None,
                     ملاحظات: str = None):
-    avatar = _bot_avatar()
+    avatar = _member_avatar(interaction.user)
     records = await load_records()
     user_id = str(interaction.user.id)
     if user_id not in records or not records[user_id]:
@@ -1053,10 +1350,10 @@ async def edit_last(interaction: discord.Interaction,
     changed = []
     if العمل:
         last["work_name"] = العمل
-        changed.append(f"العمل ← {العمل}")
+        changed.append(f"✓ العمل ← {العمل}")
     if الفصل:
         last["chapter"] = الفصل
-        changed.append(f"الفصل ← {الفصل}")
+        changed.append(f"✓ الفصل ← {الفصل}")
     if التخصص:
         norm_type = map_type(التخصص)
         if norm_type not in PRICES:
@@ -1065,14 +1362,14 @@ async def edit_last(interaction: discord.Interaction,
             return
         last["work_type"] = norm_type
         last["total"] = PRICES[norm_type]
-        changed.append(f"التخصص ← {norm_type}")
+        changed.append(f"✓ التخصص ← {norm_type}")
     if ملاحظات is not None:
         last["notes"] = ملاحظات
-        changed.append("الملاحظات ← محدثة")
+        changed.append("✓ الملاحظات ← محدثة")
 
     await save_records(records)
     await update_stats()
-    detail = "\n".join(f"✓ {c}" for c in changed) or "لم تحدد أي تغيير."
+    detail = "\n".join(changed) or "لم تحدد أي تغيير."
     await interaction.response.send_message(view=cards.success_card(
         "✅ تم تعديل آخر سجل",
         [f"<@{interaction.user.id}>", detail],

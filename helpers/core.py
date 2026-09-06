@@ -13,9 +13,91 @@ PRICES = {}
 FIXED_ALLOWED_CHANNEL = "ム・💎〢شات・اونر"
 
 def is_admin(interaction: discord.Interaction) -> bool:
+    """توحيد صلاحية الإدارة لكل الأوامر:
+    مدير السيرفر (administrator) أو من يملك إدارة الرسائل (manage_messages)."""
     if not interaction.guild:
         return False
-    return interaction.user.guild_permissions.administrator
+    perms = getattr(interaction.user, "guild_permissions", None)
+    if perms is None:
+        return False
+    return perms.administrator or perms.manage_messages
+
+
+def channel_allowed(interaction: discord.Interaction) -> bool:
+    """فحص آمن للقناة المسموحة (يعمل مع الثريدات والقنوات بدون اسم)."""
+    ch = getattr(interaction, "channel", None)
+    name = getattr(ch, "name", None)
+    return bool(name) and name in SETTINGS.get("allowed_channels", [])
+
+
+def sort_entries_by_chapter(entries: list) -> list:
+    """ترتيب السجلات رقميًا حسب رقم الفصل (وإلا نصيًا) — للعرض المنظم."""
+    def key(e):
+        ch = str(e.get("chapter", ""))
+        if ch.isdigit():
+            return (0, int(ch), "")
+        return (1, 0, ch)
+    return sorted(entries, key=key)
+
+
+def entry_datetime(entry: dict):
+    """تحويل طابع السجل الزمني إلى datetime بأمان (None عند الفشل)."""
+    ts = entry.get("timestamp")
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(str(ts))
+    except Exception:
+        return None
+
+
+def build_monthly_summary_card(user, month_entries: list, currency: str = "$", avatar_url=None):
+    """بطاقة الملخص الشهري الموحدة — تُستخدم في /ملخص_شهري وفي زر
+    «ملخص شهري» داخل لوحة التحكم حتى لا يختلف التصميم أبدًا."""
+    from ui import cards  # استيراد مؤجل لتجنب أي دورة استيراد
+
+    currency = currency or "$"
+    total = sum(e.get("total", 0) for e in month_entries)
+    bonuses = sum(e.get("total", 0) for e in month_entries if e.get("work_type") == "مكافأة")
+    deductions = sum(abs(e.get("total", 0)) for e in month_entries if e.get("work_type") == "خصم")
+    work_entries = [e for e in month_entries if e.get("work_type") not in ("مكافأة", "خصم")]
+
+    works_count = defaultdict(int)
+    for e in work_entries:
+        works_count[e.get("work_name", "غير محدد")] += 1
+    types_count = defaultdict(int)
+    for e in work_entries:
+        types_count[e.get("work_type", "غير محدد")] += 1
+
+    works_lines = [f"• **{w}** — {c} فصول" for w, c in sorted(works_count.items(), key=lambda kv: -kv[1])] or ["• لا يوجد"]
+    types_lines = [f"• **{t.replace('_', ' ').title()}** — {c} فصول"
+                   for t, c in sorted(types_count.items(), key=lambda kv: -kv[1])] or ["• لا يوجد"]
+    net = total + bonuses - deductions
+
+    body = "\n".join([
+        "### 📊 الحصيلة الشهرية",
+        f"**📑 الفصول:** {len(work_entries)} • **🎁 المكافآت:** {currency}{bonuses:,.2f} • "
+        f"**🔻 الخصومات:** {currency}{deductions:,.2f}",
+        f"**💵 الصافي المستحق:** {currency}{net:,.2f}",
+        "",
+        "### 📚 تفصيل الأعمال",
+        *works_lines,
+        "",
+        "### 🛠️ تفصيل التخصصات",
+        *types_lines,
+    ])
+
+    thumb = avatar_url
+    if thumb is None and hasattr(user, "display_avatar"):
+        thumb = user.display_avatar.url
+    children = [
+        cards.member_header(["## 📆 الملخص الشهري", f"<@{user.id}>"], user) if thumb else cards.header(["## 📆 الملخص الشهري", f"<@{user.id}>"], None),
+        cards.sep(2),
+        cards.text(cards.clamp(body, 3500)),
+        cards.sep(),
+        cards.text(f"-# من بداية الشهر حتى الآن • {cards.BOT_SIGNATURE}"),
+    ]
+    return cards.Card(cards.ACCENT_GOLD, *children)
 
 def format_member_display(guild: discord.Guild, user_id: int, username_hint: str = None) -> str:
     member = guild.get_member(user_id)
@@ -409,7 +491,7 @@ def make_embed(kind: str, title: str, description: str = "", interaction: discor
     emb = discord.Embed(title=title, description=description, color=EMBED_COLORS.get(kind, discord.Color.blurple()))
     if member:
         emb.set_thumbnail(url=member.display_avatar.url)
-    footer = "By ZEUS • TEAM Cookies"
+    footer = "Cookies Tracker • TEAM Cookies"
     if interaction:
         footer += f" • {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
     emb.set_footer(text=footer)

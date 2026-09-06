@@ -13,6 +13,13 @@ def _bot_avatar(interaction_or_bot):
     return user.display_avatar.url if user else None
 
 
+def _member_avatar(member):
+    try:
+        return member.display_avatar.url if member else None
+    except Exception:
+        return None
+
+
 # ═══════════════════════════════════════════════════════════════
 # 🔧 بطاقة تأكيد قياسية — نفس قواعد أزرار بوت السحب:
 #   تأكيد (Danger 4) + إلغاء (Secondary 2)، النتيجة ✅ خضراء
@@ -74,7 +81,6 @@ class DeletePanel(ui.LayoutView):
 
     def rebuild(self):
         self.clear_items()
-        avatar = _bot_avatar(bot)
         options = []
         if self.work_name:
             options.append(discord.SelectOption(label="🗑️ حذف كل فصول هذا العمل", value="delete_work",
@@ -88,7 +94,7 @@ class DeletePanel(ui.LayoutView):
         label_line = (f"**{self.member.mention}** — عمل «{cards.clamp(self.work_name, 60)}»"
                       if self.work_name else f"**{self.member.mention}**")
         children: list = [
-            cards.header(["## 🗑️ خيارات الحذف", label_line], avatar),
+            cards.header(["## 🗑️ خيارات الحذف", label_line], _member_avatar(self.member)),
             cards.sep(2),
             cards.make_select("اختر إجراء...", options, self.select_callback),
             cards.sep(),
@@ -186,10 +192,9 @@ class ChapterDeletePanel(ui.LayoutView):
 
     def rebuild(self):
         self.clear_items()
-        avatar = _bot_avatar(bot)
         children: list = [
             cards.header(["## 🔍 حذف فصل محدد",
-                          f"**{self.member.mention}** — عمل «{cards.clamp(self.work_name, 60)}»"], avatar),
+                          f"**{self.member.mention}** — عمل «{cards.clamp(self.work_name, 60)}»"], _member_avatar(self.member)),
             cards.sep(2),
             cards.make_select("اختر الفصل المراد حذفه...", self.options, self.select_callback),
             cards.sep(),
@@ -241,14 +246,15 @@ async def delete_advanced(interaction: discord.Interaction, member: discord.Memb
         await log_unauthorized(interaction.user.id, "حذف")
         await interaction.response.send_message(view=cards.permission_card(avatar), ephemeral=True)
         return
-    if interaction.channel.name not in SETTINGS.get("allowed_channels", []):
+    if not channel_allowed(interaction):
         await interaction.response.send_message(view=cards.channel_card(SETTINGS.get("allowed_channels", []), avatar), ephemeral=True)
         return
     records = await load_records()
     user_id_str = str(member.id)
     if user_id_str not in records or not records[user_id_str]:
         await interaction.response.send_message(view=cards.error_card(
-            "❌ لا توجد سجلات", [f"العضو {member.mention} ما عنده أي شغل محفوظ."]), ephemeral=True)
+            "❌ لا توجد سجلات", [f"العضو {member.mention} ما عنده أي شغل محفوظ."],
+            avatar_url=_member_avatar(member)), ephemeral=True)
         return
     if work_name:
         work_exists = any(e.get("work_name") == work_name for e in records[user_id_str])
@@ -276,9 +282,8 @@ class WorkPickPanel(ui.LayoutView):
 
     def rebuild(self):
         self.clear_items()
-        avatar = _bot_avatar(bot)
         children: list = [
-            cards.header(["## 🗑️ اختر العمل أو الإجراء", f"**{self.member.mention}**"], avatar),
+            cards.header(["## 🗑️ اختر العمل أو الإجراء", f"**{self.member.mention}**"], _member_avatar(self.member)),
             cards.sep(2),
             cards.make_select("اختر عملاً أو خياراً...", self._options(), self.select_callback),
             cards.sep(),
@@ -409,7 +414,7 @@ async def delete_all_work_slash(interaction: discord.Interaction):
         await log_unauthorized(interaction.user.id, "حذف_الكل")
         await interaction.response.send_message(view=cards.permission_card(avatar), ephemeral=True)
         return
-    if interaction.channel.name not in SETTINGS.get("allowed_channels", []):
+    if not channel_allowed(interaction):
         await interaction.response.send_message(view=cards.channel_card(SETTINGS.get("allowed_channels", []), avatar), ephemeral=True)
         return
 

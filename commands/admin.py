@@ -15,6 +15,13 @@ def _bot_avatar():
     return bot.user.display_avatar.url if bot.user else None
 
 
+def _member_avatar(member):
+    try:
+        return member.display_avatar.url if member else None
+    except Exception:
+        return None
+
+
 # ═══════════════════════════════════════════════════════════════
 # /تصدير — تصدير JSON (للعضو المخصص فقط)
 # ═══════════════════════════════════════════════════════════════
@@ -256,61 +263,55 @@ async def edit_work(interaction: discord.Interaction, العمل: str, الاس�
         "✅ تم تعديل العمل", [f"**«{العمل}»**\n{checklist}"], avatar_url=avatar), ephemeral=True)
 
 
-class WorksListPaginator(ui.LayoutView):
-    def __init__(self, works: list):
-        super().__init__(timeout=300.0)
-        self.works = works
-        self.currency = SETTINGS.get('currency', '$') or '$'
-        self.current_page = 0
-        self.per_page = 20
-        self.total_pages = max(1, (len(works) + self.per_page - 1) // self.per_page)
-        self.rebuild()
-
-    def rebuild(self):
-        self.clear_items()
-        avatar = _bot_avatar()
-        children: list = [
-            cards.header(["## 📋 قائمة الأعمال المدفوعة", f"**{len(self.works)}** عمل في القائمة."], avatar),
-            cards.sep(2),
-        ]
-        start = self.current_page * self.per_page
-        page_works = self.works[start:start + self.per_page]
-        blocks = []
-        for w in page_works:
-            paid_info = "كل الفصول مدفوعة" if w.get("paid_start") is None else f"يبدأ الدفع من فصل {w['paid_start']}"
-            active_icon = "✅" if w.get("active", True) else "❌"
-            isolated_info = "\n⏸️ معزول عن الحسابات الظاهرة" if is_work_isolated(w) else ""
-            blocks.append(f"• {active_icon} **{w['name']}** — {paid_info}{isolated_info}")
-        children.append(cards.text(cards.clamp("\n".join(blocks), 3400)))
-        if self.total_pages > 1:
-            children += [cards.sep(), cards.pager_row(self.current_page, self.total_pages,
-                                                      self.previous_page, self.next_page)]
-        children += [cards.sep(), cards.text(f"-# {cards.BOT_SIGNATURE}")]
-        self.add_item(cards.Card(cards.ACCENT_GOLD, *children))
-
-    async def refresh(self, interaction: discord.Interaction):
-        self.rebuild()
-        await interaction.response.edit_message(view=self)
-
-    async def previous_page(self, interaction: discord.Interaction):
-        self.current_page = max(0, self.current_page - 1)
-        await self.refresh(interaction)
-
-    async def next_page(self, interaction: discord.Interaction):
-        self.current_page = min(self.total_pages - 1, self.current_page + 1)
-        await self.refresh(interaction)
-
-
-@bot.tree.command(name="عرض_الاعمال", description="عرض قائمة الأعمال المدفوعة وحالتها")
-@app_commands.checks.cooldown(1, 5, key=lambda i: (i.user.id, i.command.qualified_name))
-async def list_works(interaction: discord.Interaction):
-    works = await load_works()
-    if not works:
-        await interaction.response.send_message(view=cards.info_card(
-            "📭 لا توجد أعمال", ["لا توجد أعمال في القائمة."], avatar_url=_bot_avatar()), ephemeral=True)
-        return
-    view = WorksListPaginator(works)
-    await interaction.response.send_message(view=view)
+# ═══════════════════════════════════════════════════════════════
+# دالة بناء صفوف تقرير الدفع — مشتركة بين /تقرير_دفع وزر
+# «💳 تقرير الدفع» في لوحة التحكم حتى لا يختلف الرقمان أبدًا.
+# ═══════════════════════════════════════════════════════════════
+async def build_payment_rows(guild: discord.Guild):
+    records = await load_visible_records()
+    month_start = datetime.utcnow().replace(day=1)
+    totals = {}
+    details = {}
+    rows = []
+    for user_id, entries in records.items():
+        user_total = 0
+        user_entries = []
+        chapters = 0
+        bonuses = 0
+        deductions = 0
+        works_count = defaultdict(int)
+        for e in entries:
+            try:
+                entry_date = datetime.fromisoformat(e["timestamp"])
+                if entry_date >= month_start:
+                    user_total += e.get("total", 0)
+                    user_entries.append(e)
+                    if e.get("work_type") == "مكافأة":
+                        bonuses += e.get("total", 0)
+                    elif e.get("work_type") == "خصم":
+                        deductions += abs(e.get("total", 0))
+                    else:
+                        chapters += 1
+                        works_count[e.get("work_name", "غير محدد")] += 1
+            except:
+                pass
+        if user_entries:
+            totals[user_id] = user_total
+            details[user_id] = user_entries
+            user = guild.get_member(int(user_id)) if guild else None
+            username_hint = next((e.get("username") for e in user_entries if e.get("username")), None)
+            rows.append({
+                "user_id": user_id,
+                "mention": f"<@{user_id}>",
+                "name": user.display_name if user else (username_hint or user_id),
+                "total": user_total,
+                "chapters": chapters,
+                "bonuses": bonuses,
+                "deductions": deductions,
+                "works": sorted(works_count.items(), key=lambda item: item[1], reverse=True),
+            })
+    rows.sort(key=lambda row: row["total"], reverse=True)
+    return rows, details
 
 
 @bot.tree.command(name="عزل_عمل", description="عزل عمل كامل عن عرض المستحقات دون حذف سجلاته")
@@ -726,7 +727,7 @@ async def add_bonus(interaction: discord.Interaction, عضو: discord.Member, ا
         lines.append(f"**📝 السبب:** {السبب}")
     lines.append(f"**🛡️ أضيفت بواسطة:** {interaction.user.mention}")
     children = [
-        cards.header(["## 🎁 تمت إضافة المكافأة", f"<@{عضو.id}>"], avatar),
+        cards.header(["## 🎁 تمت إضافة المكافأة", f"<@{عضو.id}>"], _member_avatar(عضو)),
         cards.sep(2),
         cards.text("\n".join(lines)),
         cards.sep(),
@@ -781,7 +782,7 @@ async def add_deduction(interaction: discord.Interaction, عضو: discord.Member
         lines.append(f"**📝 السبب:** {السبب}")
     lines.append(f"**🛡️ أضيف بواسطة:** {interaction.user.mention}")
     children = [
-        cards.header(["## 🔻 تم الخصم", f"<@{عضو.id}>"], avatar),
+        cards.header(["## 🔻 تم الخصم", f"<@{عضو.id}>"], _member_avatar(عضو)),
         cards.sep(2),
         cards.text("\n".join(lines)),
         cards.sep(),
@@ -843,13 +844,13 @@ class BonusDeletePanel(ui.LayoutView):
         self.clear_items()
         children: list = [
             cards.header(["## ⚖️ عمليات المكافآت والخصومات", f"**{self.member.mention}** — أحدث 10 عمليات."],
-                         _bot_avatar()),
+                         _member_avatar(self.member)),
             cards.sep(2),
             cards.make_select("اختر العملية للحذف...", self.options, self.select_callback),
             cards.sep(),
             cards.text(f"-# {cards.BOT_SIGNATURE}"),
         ]
-        self.add_item(cards.Card(cards.ACCENT_GOLD, *children))
+        self.add_item(cards.container(cards.ACCENT_GOLD, *children))
 
     async def select_callback(self, interaction: discord.Interaction):
         value = interaction.data['values'][0]
@@ -926,12 +927,13 @@ async def set_payment_day(interaction: discord.Interaction, اليوم: int, ا�
 
 
 class PaymentReportPaginator(ui.LayoutView):
-    def __init__(self, rows, details, guild, currency):
-        super().__init__(timeout=300.0)
+    def __init__(self, rows, details, guild, currency, back=None):
+        super().__init__(timeout=600.0)
         self.rows = rows
         self.details = details
         self.guild = guild
         self.currency = currency or '$'
+        self.back = back
         self.current_page = 0
         self.per_page = 6
         self.total_pages = max(1, (len(rows) + self.per_page - 1) // self.per_page)
@@ -964,8 +966,23 @@ class PaymentReportPaginator(ui.LayoutView):
                                                       self.previous_page, self.next_page)]
         children += [cards.sep(), cards.row(
             cards.success_btn("📥 تصدير Excel", self.export_excel)
-        ), cards.sep(), cards.text(f"-# {cards.BOT_SIGNATURE}")]
-        self.add_item(cards.Card(cards.ACCENT_GOLD, *children))
+        )]
+        if self.back is not None:
+            children += [cards.sep(), cards.row(cards.secondary_btn("عودة إلى لوحة التحكم", self._back_cb, emoji="↩"))]
+        children += [cards.sep(), cards.text(f"-# {cards.BOT_SIGNATURE}")]
+        self.add_item(cards.container(cards.ACCENT_GOLD, *children))
+
+    async def _back_cb(self, interaction: discord.Interaction):
+        parent = self.back
+        if callable(parent):
+            result = parent()
+            if hasattr(result, "__await__"):
+                result = await result
+            parent = result
+        if parent is None:
+            await interaction.response.defer()
+            return
+        await interaction.response.edit_message(view=parent)
 
     def _summary_line(self) -> str:
         grand_total = sum(row["total"] for row in self.rows)
@@ -1015,54 +1032,12 @@ async def payment_report(interaction: discord.Interaction):
         await log_unauthorized(interaction.user.id, "تقرير_دفع")
         await interaction.response.send_message(view=cards.permission_card(_bot_avatar()), ephemeral=True)
         return
-    records = await load_visible_records()
-    month_start = datetime.utcnow().replace(day=1)
-    totals = {}
-    details = {}
-    rows = []
-    for user_id, entries in records.items():
-        user_total = 0
-        user_entries = []
-        chapters = 0
-        bonuses = 0
-        deductions = 0
-        works_count = defaultdict(int)
-        for e in entries:
-            try:
-                entry_date = datetime.fromisoformat(e["timestamp"])
-                if entry_date >= month_start:
-                    user_total += e.get("total", 0)
-                    user_entries.append(e)
-                    if e.get("work_type") == "مكافأة":
-                        bonuses += e.get("total", 0)
-                    elif e.get("work_type") == "خصم":
-                        deductions += abs(e.get("total", 0))
-                    else:
-                        chapters += 1
-                        works_count[e.get("work_name", "غير محدد")] += 1
-            except:
-                pass
-        if user_entries:
-            totals[user_id] = user_total
-            details[user_id] = user_entries
-            user = interaction.guild.get_member(int(user_id))
-            username_hint = next((e.get("username") for e in user_entries if e.get("username")), None)
-            rows.append({
-                "user_id": user_id,
-                "mention": f"<@{user_id}>",
-                "name": user.display_name if user else (username_hint or user_id),
-                "total": user_total,
-                "chapters": chapters,
-                "bonuses": bonuses,
-                "deductions": deductions,
-                "works": sorted(works_count.items(), key=lambda item: item[1], reverse=True),
-            })
-    if not totals:
+    rows, details = await build_payment_rows(interaction.guild)
+    if not rows:
         await interaction.response.send_message(view=cards.info_card(
             "📭 لا توجد سجلات", ["لا توجد أي سجلات لهذا الشهر."], avatar_url=_bot_avatar()), ephemeral=True)
         return
 
-    rows.sort(key=lambda row: row["total"], reverse=True)
     view = PaymentReportPaginator(rows, details, interaction.guild, SETTINGS.get('currency', '$'))
     await interaction.response.send_message(view=view)
 
@@ -1073,43 +1048,34 @@ async def payment_report(interaction: discord.Interaction):
 @bot.tree.command(name="ملخص_شهري", description="ملخص شغلك للشهر الحالي")
 @app_commands.checks.cooldown(1, 5, key=lambda i: (i.user.id, i.command.qualified_name))
 async def monthly_summary(interaction: discord.Interaction):
-    if interaction.channel.name not in SETTINGS.get("allowed_channels", []):
+    if not channel_allowed(interaction):
         await interaction.response.send_message(
             view=cards.channel_card(SETTINGS.get("allowed_channels", []), _bot_avatar()), ephemeral=True)
         return
-    avatar = _bot_avatar()
     records = await load_visible_records()
     user_id = str(interaction.user.id)
     if user_id not in records:
         await interaction.response.send_message(view=cards.info_card(
-            "📭 ليس لديك أي شغل", ["لم تسجل أي فصول بعد — ابدأ بأمر /تسجيل."], avatar_url=avatar), ephemeral=True)
+            "📭 ليس لديك أي شغل", ["لم تسجل أي فصول بعد — ابدأ بأمر /تسجيل."],
+            avatar_url=_member_avatar(interaction.user)), ephemeral=True)
         return
     month_start = datetime.utcnow().replace(day=1)
-    month_entries = [e for e in records[user_id] if "timestamp" in e and datetime.fromisoformat(e["timestamp"]) >= month_start]
+    month_entries = []
+    for e in records[user_id]:
+        try:
+            if datetime.fromisoformat(e["timestamp"]) >= month_start:
+                month_entries.append(e)
+        except Exception:
+            pass
     if not month_entries:
         await interaction.response.send_message(view=cards.info_card(
-            "📭 لا يوجد عمل هذا الشهر", ["لم تقم بأي عمل هذا الشهر."], avatar_url=avatar), ephemeral=True)
+            "📭 لا يوجد عمل هذا الشهر", ["لم تقم بأي عمل هذا الشهر."],
+            avatar_url=_member_avatar(interaction.user)), ephemeral=True)
         return
-    total = sum(e.get("total", 0) for e in month_entries)
-    works_count = defaultdict(int)
-    for e in month_entries:
-        works_count[e.get("work_name", "غير محدد")] += 1
-    details_str = "\n".join([f"• **{w}:** {c} فصول" for w, c in works_count.items()])
-    currency = SETTINGS.get('currency', '$') or '$'
-    children = [
-        cards.header(["## 📆 ملخصك الشهري", f"<@{interaction.user.id}>"], avatar),
-        cards.sep(2),
-        cards.progress_line(len(month_entries), len(month_entries)),
-        cards.sep(),
-        cards.text(
-            f"**عدد الفصول المنجزة:** {len(month_entries)}\n"
-            f"**المبلغ المستحق:** {currency}{total:.2f}\n\n"
-            f"**تفصيل الأعمال**\n{details_str}"
-        ),
-        cards.sep(),
-        cards.text(f"-# من بداية الشهر حتى الآن • {cards.BOT_SIGNATURE}"),
-    ]
-    await interaction.response.send_message(view=cards.Card(cards.ACCENT_GOLD, *children))
+    # نفس البطاقة المستخدمة في زر «ملخص شهري» بلوحة التحكم — تصميم واحد لا يتغير
+    card = build_monthly_summary_card(interaction.user, month_entries,
+                                      SETTINGS.get('currency', '$'), _member_avatar(interaction.user))
+    await interaction.response.send_message(view=card)
 
 
 # ═══════════════════════════════════════════════════════════════
