@@ -60,12 +60,13 @@ def _guild_member(guild: discord.Guild | None, user_id) -> discord.Member | None
 # 1️⃣ قائمة الأعمال — مرتبة من الأكثر نشاطًا إلى الأقل
 # ═══════════════════════════════════════════════════════════════
 async def get_works_info(guild: discord.Guild):
-    """Build list of works with their contributors."""
+    """Build list of works with their contributors — نشاط الشهر النشط الحالي."""
     approved_works = await load_works()
-    records = await load_records()
-    isolated = get_isolated_work_names(approved_works)
+    records = await load_visible_records()  # سجلات الشهر النشط بلا أعمال معزولة
 
     contrib_map = defaultdict(lambda: defaultdict(lambda: {"count": 0, "total": 0.0, "types": defaultdict(int)}))
+    # load_visible_records استبعدت الأعمال المعزولة وسجلاتها مسبقًا
+    isolated: set[str] = set()
     for user_id_str, entries in records.items():
         for entry in entries:
             work = entry.get("work_name")
@@ -90,7 +91,8 @@ async def get_works_info(guild: discord.Guild):
                     if e.get("username"):
                         username_hint = e["username"]
                         break
-            display = member_display_name(guild, uid, username_hint)
+            # النك نيم في السيرفر أولاً (جلب عند الحاجة) — لا يوزر نيم خام
+            display = await resolve_display_name(guild, uid, username_hint)
             members_list.append((uid, display, member_stats["count"], member_stats["total"], dict(member_stats["types"])))
         members_list.sort(key=lambda item: (item[2], item[3]), reverse=True)
         works_info.append((work_name, members_list))
@@ -216,6 +218,8 @@ class WorkMembersView(DynamicCardView):
             "total": e.get("total", 0),
             "notes": e.get("notes", "")
         } for e in work_entries]
+        # اسم عرض العضو (نك نيم السيرفر) من قائمة المساهمين المُحلّة مسبقًا
+        user_display = next((m[1] for m in self.members_info if m[0] == user_id), str(user_id))
         view = WorkDetailsView(
             self.work_name, chapters_details, user_id, user_display,
             self.currency, back_view=self, guild=self.guild,
@@ -264,6 +268,7 @@ class WorkMembersView(DynamicCardView):
                     label=cards.clamp(m[1], 100),
                     value=str(m[0]),
                     description=cards.clamp(f"{m[2]} فصول • {self.currency}{m[3]:,.2f}", 100),
+                    emoji="👤",
                 ) for m in page_members
             ]
             children.append(cards.make_select("اختر عضواً لعرض فصوله بالتفصيل...", options, self.select_callback))

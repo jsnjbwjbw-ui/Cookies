@@ -6,7 +6,8 @@ from discord.ext import commands
 from state import bot
 from helpers.core import (
     SETTINGS, log_unauthorized, log_audit, update_stats,
-    load_settings, save_settings, load_records, save_records, load_works, save_works
+    load_settings, save_settings, load_records, save_records, load_works, save_works,
+    entry_datetime, month_key_from_datetime, get_active_month_key,
 )
 from tasks.lifecycle import is_admin
 from ui import cards
@@ -149,13 +150,19 @@ async def upload_records(interaction: discord.Interaction, file: discord.Attachm
                 avatar_url=avatar_url), ephemeral=True)
             return
 
-        # Update records
+        # Update records — مع ختم شهر كل سجل من تاريخه ليعمل فورًا مع نظام الشهور
         if not isinstance(records_data, dict):
             await interaction.followup.send(view=cards.error_card(
                 "قسم records غير صالح",
                 ["قسم السجلات في الملف غير صالح."],
                 avatar_url=avatar_url), ephemeral=True)
             return
+        for user_entries in records_data.values():
+            if isinstance(user_entries, list):
+                for entry in user_entries:
+                    if isinstance(entry, dict) and not entry.get("month_key"):
+                        dt = entry_datetime(entry)
+                        entry["month_key"] = month_key_from_datetime(dt) if dt else get_active_month_key()
         from database import collection
         await collection.update_one({"_id": "records"}, {"$set": {"data": records_data}}, upsert=True)
         total_users = len(records_data)

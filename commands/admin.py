@@ -267,8 +267,9 @@ async def edit_work(interaction: discord.Interaction, العمل: str, الاس�
 # «💳 تقرير الدفع» في لوحة التحكم حتى لا يختلف الرقمان أبدًا.
 # ═══════════════════════════════════════════════════════════════
 async def build_payment_rows(guild: discord.Guild):
-    records = await load_visible_records()
-    month_start = datetime.utcnow().replace(day=1)
+    """صفوف تقرير الدفع — للشهر النشط الحالي (من /الشهور) وليس الشهر الميلادي."""
+    active_key = get_active_month_key()
+    records = await load_visible_records(active_key)
     totals = {}
     details = {}
     rows = []
@@ -280,20 +281,15 @@ async def build_payment_rows(guild: discord.Guild):
         deductions = 0
         works_count = defaultdict(int)
         for e in entries:
-            try:
-                entry_date = datetime.fromisoformat(e["timestamp"])
-                if entry_date >= month_start:
-                    user_total += e.get("total", 0)
-                    user_entries.append(e)
-                    if e.get("work_type") == "مكافأة":
-                        bonuses += e.get("total", 0)
-                    elif e.get("work_type") == "خصم":
-                        deductions += abs(e.get("total", 0))
-                    else:
-                        chapters += 1
-                        works_count[e.get("work_name", "غير محدد")] += 1
-            except:
-                pass
+            user_total += e.get("total", 0)
+            user_entries.append(e)
+            if e.get("work_type") == "مكافأة":
+                bonuses += e.get("total", 0)
+            elif e.get("work_type") == "خصم":
+                deductions += abs(e.get("total", 0))
+            else:
+                chapters += 1
+                works_count[e.get("work_name", "غير محدد")] += 1
         if user_entries:
             totals[user_id] = user_total
             details[user_id] = user_entries
@@ -712,12 +708,18 @@ async def add_bonus(interaction: discord.Interaction, عضو: discord.Member, ا
         "total": abs(المبلغ),
         "notes": السبب or "",
         "timestamp": datetime.utcnow().isoformat(),
+        "month_key": get_active_month_key(),
         "username": عضو.name,
         "added_by": str(interaction.user.id)
     }
     records[user_id].append(bonus_entry)
-    await save_records(records)
+    saved = await save_records(records)
+    if not saved:
+        await interaction.response.send_message(view=cards.error_card(
+            "تعذر الحفظ", ["قاعدة البيانات غير متاحة — لم يُطبق شيء."], avatar_url=avatar), ephemeral=True)
+        return
     await update_stats()
+    await upsert_member(عضو.id, عضو.name)
 
     currency = SETTINGS.get('currency', '$') or '$'
     lines = [f"**💰 المبلغ:** {currency}{abs(المبلغ):.2f}"]
@@ -766,12 +768,18 @@ async def add_deduction(interaction: discord.Interaction, عضو: discord.Member
         "total": -abs(المبلغ),
         "notes": السبب or "",
         "timestamp": datetime.utcnow().isoformat(),
+        "month_key": get_active_month_key(),
         "username": عضو.name,
         "added_by": str(interaction.user.id)
     }
     records[user_id].append(deduction_entry)
-    await save_records(records)
+    saved = await save_records(records)
+    if not saved:
+        await interaction.response.send_message(view=cards.error_card(
+            "تعذر الحفظ", ["قاعدة البيانات غير متاحة — لم يُطبق شيء."], avatar_url=avatar), ephemeral=True)
+        return
     await update_stats()
+    await upsert_member(عضو.id, عضو.name)
 
     currency = SETTINGS.get('currency', '$') or '$'
     lines = [f"**💰 المبلغ المخصوم:** {currency}{abs(المبلغ):.2f}"]
@@ -931,6 +939,7 @@ class PaymentReportPaginator(ui.LayoutView):
         self.guild = guild
         self.currency = currency or '$'
         self.back = back
+        self.month_label = None  # يُملأ عند الإنشاء من الأمر
         self.current_page = 0
         self.per_page = 6
         self.total_pages = max(1, (len(rows) + self.per_page - 1) // self.per_page)
@@ -939,9 +948,12 @@ class PaymentReportPaginator(ui.LayoutView):
     def rebuild(self):
         self.clear_items()
         avatar = _bot_avatar()
+        month_note = f"لشهر {self.month_label}" if self.month_label else "الشهر الحالي"
         children: list = [
-            cards.header(["## تقرير الدفع الشهري", self._summary_lines()], avatar),
+            cards.header(["## تقرير الدفع الشهري", month_note], avatar),
             cards.sep(2),
+            cards.text(self._summary_lines()),
+            cards.sep(),
         ]
         start = self.current_page * self.per_page
         page_rows = self.rows[start:start + self.per_page]
@@ -1033,11 +1045,13 @@ async def payment_report(interaction: discord.Interaction):
         return
     rows, details = await build_payment_rows(interaction.guild)
     if not rows:
+        active_label = await get_month_name(get_active_month_key())
         await interaction.response.send_message(view=cards.info_card(
-            "لا توجد سجلات", ["لا توجد أي سجلات لهذا الشهر."], avatar_url=_bot_avatar()), ephemeral=True)
+            "لا توجد سجلات", [f"لا توجد أي سجلات لشهر **{active_label}**."], avatar_url=_bot_avatar()), ephemeral=True)
         return
 
     view = PaymentReportPaginator(rows, details, interaction.guild, SETTINGS.get('currency', '$'))
+    view.month_label = await get_month_name(get_active_month_key())
     await interaction.response.send_message(view=view)
 
 
@@ -1051,21 +1065,15 @@ async def monthly_summary(interaction: discord.Interaction):
         await interaction.response.send_message(
             view=cards.channel_card(SETTINGS.get("allowed_channels", []), _bot_avatar()), ephemeral=True)
         return
-    records = await load_visible_records()
+    active_key = get_active_month_key()
+    records = await load_visible_records(active_key)
     user_id = str(interaction.user.id)
     if user_id not in records:
         await interaction.response.send_message(view=cards.info_card(
             "ليس لديك أي شغل", ["لم تسجل أي فصول بعد — ابدأ بأمر /تسجيل."],
             avatar_url=_member_avatar(interaction.user)), ephemeral=True)
         return
-    month_start = datetime.utcnow().replace(day=1)
-    month_entries = []
-    for e in records[user_id]:
-        try:
-            if datetime.fromisoformat(e["timestamp"]) >= month_start:
-                month_entries.append(e)
-        except Exception:
-            pass
+    month_entries = records[user_id]
     if not month_entries:
         await interaction.response.send_message(view=cards.info_card(
             "لا يوجد عمل هذا الشهر", ["لم تقم بأي عمل هذا الشهر."],
@@ -1073,7 +1081,8 @@ async def monthly_summary(interaction: discord.Interaction):
         return
     # نفس البطاقة المستخدمة في زر «ملخص شهري» بلوحة التحكم — تصميم واحد لا يتغير
     card = build_monthly_summary_card(interaction.user, month_entries,
-                                      SETTINGS.get('currency', '$'), _member_avatar(interaction.user))
+                                      SETTINGS.get('currency', '$'), _member_avatar(interaction.user),
+                                      month_label=await get_month_name(active_key))
     await interaction.response.send_message(view=card)
 
 
@@ -1099,6 +1108,7 @@ async def update_prices(interaction: discord.Interaction, التخصص: str = No
     records = await load_records()
     specialties = SETTINGS.get("specialties", {})
     updated_count = 0
+    active_key = get_active_month_key()
     # Determine specialty filter
     target_specialty = map_type(التخصص) if التخصص else None
     if target_specialty and target_specialty not in specialties:
@@ -1118,9 +1128,9 @@ async def update_prices(interaction: discord.Interaction, التخصص: str = No
                 "صيغة تاريخ غير صحيحة", ["استخدم صيغة YYYY-MM-DD."], avatar_url=avatar), ephemeral=True)
             return
     else:
-        # Default: current month
-        date_from = datetime.utcnow().replace(day=1)
-        date_to = datetime.utcnow()
+        # Default: الشهر النشط الحالي (من /الشهور)
+        date_from = None
+        date_to = None
     # Iterate records and update
     for user_id, entries in records.items():
         for entry in entries:
@@ -1129,19 +1139,25 @@ async def update_prices(interaction: discord.Interaction, التخصص: str = No
                 continue
             if target_specialty and wtype != target_specialty:
                 continue
-            if not كل_السجلات:
+            if كل_السجلات:
+                pass
+            elif من_تاريخ or الى_تاريخ:
                 try:
                     entry_date = datetime.fromisoformat(entry.get("timestamp"))
                     if entry_date < date_from or entry_date > date_to:
                         continue
                 except:
                     continue
+            else:
+                # نطاق الشهر النشط فقط
+                if month_key_of(entry) != active_key:
+                    continue
             if specialties[wtype].get("active", True):
                 entry["total"] = specialties[wtype]["price"]
                 updated_count += 1
     await save_records(records)
     await update_stats()
-    period_str = "كل السجلات" if كل_السجلات else f"{من_تاريخ or 'بداية الشهر'} ← {الى_تاريخ or 'الآن'}"
+    period_str = "كل السجلات" if كل_السجلات else (f"{من_تاريخ or 'بداية'} ← {الى_تاريخ or 'الآن'}" if (من_تاريخ or الى_تاريخ) else f"الشهر النشط ({active_key})")
     await log_audit("تحديث_أسعار", interaction.user.id, None,
                     f"تم تحديث {updated_count} سجل - التخصص: {التخصص or 'الكل'}, الفترة: {period_str}")
 

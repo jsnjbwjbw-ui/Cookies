@@ -75,8 +75,6 @@ def build_receipt_card(
         final_lines.append(f"**أضيف بواسطة:** <@{added_by.id}>")
     if notes:
         final_lines.append(f"**الملاحظات:** {cards.clamp(notes, 300)}")
-    now = datetime.utcnow()
-    final_lines.append(f"**تاريخ العملية:** {now.strftime('%Y-%m-%d %I:%M %p')} UTC")
     children += [cards.sep(), cards.text("\n".join(final_lines))]
 
     children += [cards.sep(), cards.text(f"-# {cards.BOT_SIGNATURE}")]
@@ -193,8 +191,10 @@ async def register_slash(interaction: discord.Interaction, العمل: str, ال
         records[user_id] = []
 
     added_chapters_list = []
+    added_types_list = []
     username = interaction.user.name
     duplicates_skipped = 0
+    month_key = get_active_month_key()
     for idx, ch in enumerate(paid_chapters):
         work_type = filtered_types[idx]
         if is_duplicate(records, user_id, العمل, ch, work_type):
@@ -208,9 +208,11 @@ async def register_slash(interaction: discord.Interaction, العمل: str, ال
             "total": total,
             "notes": ملاحظات or "",
             "timestamp": datetime.utcnow().isoformat(),
+            "month_key": month_key,
             "username": username
         })
         added_chapters_list.append(ch)
+        added_types_list.append(work_type)
 
     added = len(added_chapters_list)
     if added == 0:
@@ -220,13 +222,21 @@ async def register_slash(interaction: discord.Interaction, العمل: str, ال
             avatar_url=avatar_url), ephemeral=True)
         return
 
-    await save_records(records)
+    saved = await save_records(records)
+    if not saved:
+        await interaction.response.send_message(view=cards.error_card(
+            "تعذر الحفظ",
+            ["قاعدة البيانات غير متاحة الآن.",
+             "لم تُسجل بياناتك — **لم يُفقد شيء** — أعد المحاولة بعد قليل."],
+            avatar_url=avatar_url), ephemeral=True)
+        return
     await update_stats()
+    await upsert_member(interaction.user.id, interaction.user.name)
 
-    if len(set(filtered_types)) == 1:
-        total_amount = added * await get_specialty_price(العمل, filtered_types[0])
+    if added_types_list and len(set(added_types_list)) == 1:
+        total_amount = added * await get_specialty_price(العمل, added_types_list[0])
     else:
-        total_amount = sum(await get_specialty_price(العمل, t) for t in filtered_types)
+        total_amount = sum([await get_specialty_price(العمل, t) for t in added_types_list])
 
     receipt = build_receipt_card(
         requester=interaction.user,
@@ -236,7 +246,7 @@ async def register_slash(interaction: discord.Interaction, العمل: str, ال
         total_input_chapters=len(chapters_list),
         free_count=free_count,
         duplicates_skipped=duplicates_skipped,
-        filtered_types=filtered_types,
+        filtered_types=added_types_list,
         total_amount=total_amount,
         notes=ملاحظات,
         avatar_url=_user_avatar(interaction.user),
@@ -300,8 +310,10 @@ async def register_for_member(
         records[user_id] = []
 
     added_chapters_list = []
+    added_types_list = []
     username = عضو.name
     duplicates_skipped = 0
+    month_key = get_active_month_key()
     for idx, ch in enumerate(paid_chapters):
         work_type = filtered_types[idx]
         if is_duplicate(records, user_id, العمل, ch, work_type):
@@ -315,10 +327,12 @@ async def register_for_member(
             "total": total,
             "notes": ملاحظات or "",
             "timestamp": datetime.utcnow().isoformat(),
+            "month_key": month_key,
             "username": username,
             "added_by": str(interaction.user.id)
         })
         added_chapters_list.append(ch)
+        added_types_list.append(work_type)
 
     added = len(added_chapters_list)
     if added == 0:
@@ -328,13 +342,21 @@ async def register_for_member(
             avatar_url=avatar_url), ephemeral=True)
         return
 
-    await save_records(records)
+    saved = await save_records(records)
+    if not saved:
+        await interaction.response.send_message(view=cards.error_card(
+            "تعذر الحفظ",
+            ["قاعدة البيانات غير متاحة الآن.",
+             "لم تُسجل بياناتك — **لم يُفقد شيء** — أعد المحاولة بعد قليل."],
+            avatar_url=avatar_url), ephemeral=True)
+        return
     await update_stats()
+    await upsert_member(عضو.id, عضو.name)
 
-    if len(set(filtered_types)) == 1:
-        total_amount = added * await get_specialty_price(العمل, filtered_types[0])
+    if added_types_list and len(set(added_types_list)) == 1:
+        total_amount = added * await get_specialty_price(العمل, added_types_list[0])
     else:
-        total_amount = sum(await get_specialty_price(العمل, t) for t in filtered_types)
+        total_amount = sum([await get_specialty_price(العمل, t) for t in added_types_list])
 
     receipt = build_receipt_card(
         requester=عضو,
@@ -344,7 +366,7 @@ async def register_for_member(
         total_input_chapters=len(chapters_list),
         free_count=free_count,
         duplicates_skipped=duplicates_skipped,
-        filtered_types=filtered_types,
+        filtered_types=added_types_list,
         total_amount=total_amount,
         notes=ملاحظات,
         avatar_url=_user_avatar(عضو),
@@ -366,122 +388,3 @@ async def register_for_member(
         pass
 
 
-# ═══════════════════════════════════════════════════════════════
-# أمر !تحليل — بنفس التصميم الموحد + بطاقة طلب المدخلات بنمط ZEUS
-# ═══════════════════════════════════════════════════════════════
-@bot.command(name="تحليل")
-@commands.cooldown(1, 5, commands.BucketType.user)
-async def analysis(ctx, *, text_input=None):
-    avatar_url = ctx.bot.user.display_avatar.url if ctx.bot.user else None
-
-    if not text_input:
-        # بطاقة طلب المدخلات — نفس بنية بطاقات «أرسل … خلال دقيقتين» في بوت السحب
-        available = "، ".join(PRICES.keys()) or "لا توجد تخصصات"
-        prompt = cards.info_card(
-            "أرسل بيانات التسجيل",
-            [
-                "**1.** اكتب سطر `العمل:` باسم العمل كما يظهر في /الأعمال.",
-                "**2.** اكتب سطر `الفصل:` برقم أو نطاق مثل `1-5`.",
-                "**3.** اكتب سطر `التخصص:` مثل `ترجمة كوري-تحرير`، واختياريًا سطر `ملاحظات:`.",
-                f"**التخصصات المتاحة:** {available}",
-                "-# مثال:\nالعمل: اسم العمل\nالفصل: 1-5\nالتخصص: تحرير",
-            ],
-            avatar_url=avatar_url,
-        )
-        await ctx.send(view=prompt)
-        return
-
-    fields = parse_fields(text_input)
-    work_name = fields.get("العمل") or fields.get("اسم العمل")
-    chapter_str = fields.get("الفصل") or fields.get("رقم الفصل")
-    types_str = fields.get("التخصص") or fields.get("الشغل")
-    notes = fields.get("ملاحظات", "")
-
-    if not work_name or not chapter_str or not types_str:
-        await ctx.send(view=cards.error_card(
-            "تعذر بدء التسجيل",
-            ["فيه بيانات ناقصة. لازم تكتب: `العمل`، `الفصل`، `التخصص`."],
-            avatar_url=avatar_url))
-        return
-
-    class _CtxLike:
-        """غلاف بسيط لإعادة استخدام validate_registration مع ctx."""
-        def __init__(self, ctx):
-            self.client = ctx.bot
-            self.user = ctx.author
-
-    work, chapters_list, paid_chapters, free_count, filtered_types, error_card = await validate_registration(
-        _CtxLike(ctx), work_name, chapter_str, types_str)
-    if error_card is not None:
-        await ctx.send(view=error_card)
-        return
-
-    records = await load_records()
-    user_id = str(ctx.author.id)
-    if user_id not in records:
-        records[user_id] = []
-
-    added_chapters_list = []
-    username = ctx.author.name
-    duplicates_skipped = 0
-    for idx, ch in enumerate(paid_chapters):
-        work_type = filtered_types[idx]
-        if is_duplicate(records, user_id, work_name, ch, work_type):
-            duplicates_skipped += 1
-            continue
-        total = await get_specialty_price(work_name, work_type)
-        records[user_id].append({
-            "work_name": work_name,
-            "chapter": ch,
-            "work_type": work_type,
-            "total": total,
-            "notes": notes,
-            "timestamp": datetime.utcnow().isoformat(),
-            "username": username
-        })
-        added_chapters_list.append(ch)
-
-    added = len(added_chapters_list)
-    if added == 0:
-        await ctx.send(view=cards.error_card(
-            "لم يُسجّل شيء جديد",
-            ["لم يتم إضافة أي فصل جديد (جميع الفصول مكررة)."],
-            avatar_url=avatar_url))
-        return
-
-    await save_records(records)
-    await update_stats()
-
-    if len(set(filtered_types)) == 1:
-        total_amount = added * await get_specialty_price(work_name, filtered_types[0])
-    else:
-        total_amount = sum(await get_specialty_price(work_name, t) for t in filtered_types)
-
-    receipt = build_receipt_card(
-        requester=ctx.author,
-        added_by=None,
-        work_name=work_name,
-        added_chapters=added_chapters_list,
-        total_input_chapters=len(chapters_list),
-        free_count=free_count,
-        duplicates_skipped=duplicates_skipped,
-        filtered_types=filtered_types,
-        total_amount=total_amount,
-        notes=notes,
-        avatar_url=_user_avatar(ctx.author),
-    )
-    await ctx.send(view=receipt)
-
-    notify_channel_id = SETTINGS.get("notify_channel_id")
-    if notify_channel_id:
-        channel = ctx.guild.get_channel(notify_channel_id)
-        if channel:
-            await channel.send(f"{ctx.author.mention} أضاف {added} فصول مدفوعة في عمل `{work_name}`")
-
-    total_user_amount = sum(item.get("total", 0) for item in records[user_id])
-    threshold = SETTINGS.get("alert_threshold", 10.0)
-    if total_user_amount >= threshold:
-        try:
-            await ctx.author.send(f"تنبيه: إجمالي شغلك وصل إلى {SETTINGS.get('currency', '$')}{total_user_amount:.2f}.")
-        except:
-            pass

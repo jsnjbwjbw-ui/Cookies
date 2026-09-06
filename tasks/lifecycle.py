@@ -1,3 +1,4 @@
+import asyncio
 import json
 from io import BytesIO
 from datetime import datetime, timedelta
@@ -8,8 +9,12 @@ from discord.ext import commands, tasks
 from discord import app_commands
 
 from state import bot
-from database import mongo_client
-from helpers.core import *  # noqa: F401 — يشمل is_admin الموحدة وتُعاد تصديرها لكل الملفات
+from database import mongo_client, wait_for_database
+from helpers.core import *  # noqa: F401 — يشمل is_admin الموحدة ويُعاد تصديرها لكل الملفات
+from helpers.core import (
+    DatabaseUnavailableError, month_key_of, get_active_month_key,
+    ensure_month_doc, all_known_month_keys, upsert_member,
+)
 from ui import cards
 
 BOT_DISPLAY_NAME = "Cookies Tracker"   # الاسم الظاهر للجميع (يدعم الفراغات)
@@ -40,15 +45,119 @@ async def _apply_bot_identity():
         print(f"[WARNING] Could not set username (قد يكون بسبب حد تغيير الأسماء في ديسكورد): {e}")
 
 
+# ═══════════════════════════════════════════════════════════════
+# معالجات الأخطاء العامة — بطاقة واضحة بدل "The application did not respond"
+# ═══════════════════════════════════════════════════════════════
+async def _send_error_card(send, title: str, lines: list):
+    avatar_url = bot.user.display_avatar.url if bot.user else None
+    try:
+        await send(view=cards.error_card(title, lines, avatar_url=avatar_url), ephemeral=True)
+    except Exception:
+        pass
+
+
+async def on_app_command_error(interaction: discord.Interaction, error):
+    """معالج موحد لأخطاء أوامر السلاش — خصوصًا انقطاع قاعدة البيانات."""
+    # خطأ قاعدة البيانات: الحماية أولاً — لا بيانات تضيع بصمت
+    if isinstance(error, DatabaseUnavailableError) or isinstance(getattr(error, "original", None), DatabaseUnavailableError):
+        async def _send(**kw):
+            if interaction.response.is_done():
+                await interaction.followup.send(**kw)
+            else:
+                await interaction.response.send_message(**kw)
+        await _send(view=cards.error_card(
+            "قاعدة البيانات غير متاحة",
+            ["تعذر الوصول إلى قاعدة البيانات الآن.",
+             "بياناتك المحفوظة **آمنة ولم تُمس** — رُفضت العملية حمايةً لها.",
+             "أعد المحاولة بعد قليل، وإذا استمرت المشكلة تحقق من MONGODB_URI."],
+            avatar_url=bot.user.display_avatar.url if bot.user else None), ephemeral=True)
+        return
+    if isinstance(error, app_commands.CommandOnCooldown):
+        await interaction.response.send_message(
+            view=cards.info_card("على مهلك", [f"أعد المحاولة بعد **{error.retry_after:.0f}** ثانية."],
+                                 avatar_url=bot.user.display_avatar.url if bot.user else None),
+            ephemeral=True)
+        return
+    if isinstance(error, app_commands.MissingPermissions) or isinstance(error, app_commands.CheckFailure):
+        return  # بطاقات الصلاحية تُدار داخل الأوامر نفسها
+    print(f"[ERROR] app command '{getattr(error, 'command', None)}': {error}")
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(view=cards.error_card(
+                "حدث خطأ غير متوقع", [f"`{str(error)[:300]}`"],
+                avatar_url=bot.user.display_avatar.url if bot.user else None), ephemeral=True)
+        else:
+            await interaction.response.send_message(view=cards.error_card(
+                "حدث خطأ غير متوقع", [f"`{str(error)[:300]}`"],
+                avatar_url=bot.user.display_avatar.url if bot.user else None), ephemeral=True)
+    except Exception:
+        pass
+
+
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
         return
     if isinstance(error, commands.CheckFailure):
         return
+    original = getattr(error, "original", error)
+    if isinstance(original, DatabaseUnavailableError):
+        await ctx.send(view=cards.error_card(
+            "قاعدة البيانات غير متاحة",
+            ["تعذر الوصول إلى قاعدة البيانات الآن.",
+             "بياناتك المحفوظة **آمنة ولم تُمس** — رُفضت العملية حمايةً لها.",
+             "أعد المحاولة بعد قليل."],
+            avatar_url=bot.user.display_avatar.url if bot.user else None))
+        return
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("ما عندك صلاحية تستخدم هذا الأمر.")
         return
     await ctx.send(f"صار خطأ: `{error}`")
+
+
+# ═══════════════════════════════════════════════════════════════
+# ترحيل البيانات — ختم الشهور + بذر الأعضاء + ضمان وثائق الشهور
+# ═══════════════════════════════════════════════════════════════
+async def migrate_data():
+    """ترحيل لمرة واحدة عند كل إقلاع (رخيص عند اكتمال الترحيل):
+    1) ختم كل سجل قديم بـ month_key مشتق من تاريخه.
+    2) بذر مجموعة members من السجلات حتى يبقى الأعضاء محفوظين عبر الشهور.
+    3) ضمان وجود وثيقة لكل شهر معروف + تحديد الشهر النشط إن لم يُحدد.
+    """
+    records = await load_records()
+    changed = False
+    known_users = {}
+    for user_id, entries in records.items():
+        stamps = []
+        for e in entries:
+            if not e.get("month_key"):
+                dt = entry_datetime(e)
+                e["month_key"] = month_key_from_datetime(dt) if dt else get_active_month_key()
+                changed = True
+            mk = e.get("month_key")
+            if isinstance(mk, str) and len(mk) == 7:
+                stamps.append(mk)
+            if e.get("username"):
+                known_users.setdefault(user_id, e["username"])
+        if stamps:
+            known_users.setdefault(user_id, known_users.get(user_id))
+    if changed:
+        ok = await save_records(records)
+        print(f"[LOG] migrate_data: ختم {sum(len(v) for v in records.values())} سجل بشهورها (saved={ok})")
+
+    for uid, username in known_users.items():
+        if uid:
+            await upsert_member(uid, username)
+
+    # الشهر النشط الافتراضي = الشهر الحالي (يُحفظ مرة واحدة)
+    if not SETTINGS.get("active_month"):
+        SETTINGS["active_month"] = month_key_from_datetime(datetime.utcnow())
+        await save_settings(SETTINGS)
+        print(f"[LOG] migrate_data: active_month = {SETTINGS['active_month']}")
+
+    await ensure_month_doc(get_active_month_key())
+    for key in await all_known_month_keys():
+        await ensure_month_doc(key)
+    print("[LOG] migrate_data: done")
 
 
 @bot.event
@@ -64,20 +173,35 @@ async def on_ready():
     except Exception as e:
         print(f"[WARNING] Could not set presence: {e}")
 
+    # ── بوابة قاعدة البيانات: لا إقلاع كامل قبل اتصال حقيقي ──
+    await wait_for_database(max_attempts=8, delay=3.0)
+
     loaded_settings = await load_settings()
     SETTINGS.clear()
     SETTINGS.update(loaded_settings)
+    if not SETTINGS.get("active_month"):
+        SETTINGS["active_month"] = month_key_from_datetime(datetime.utcnow())
     rebuild_prices()
     print(f"[LOG] Settings loaded: allowed_channels={SETTINGS.get('allowed_channels')}, "
-          f"currency={SETTINGS.get('currency')}")
+          f"currency={SETTINGS.get('currency')}, active_month={SETTINGS.get('active_month')}")
     try:
         await mongo_client.admin.command('ping')
         print("[LOG] MongoDB connection successful!")
     except Exception as e:
         print(f"[ERROR] MongoDB connection failed: {e}")
+
+    # ── ترحيل البيانات (ختم الشهور + بذر الأعضاء) ──
+    try:
+        await migrate_data()
+    except Exception as e:
+        print(f"[ERROR] migrate_data failed: {e}")
+
     await bot.tree.sync()
     print("[LOG] Slash commands synced")
-    await update_stats()
+    try:
+        await update_stats()
+    except Exception as e:
+        print(f"[ERROR] update_stats at boot: {e}")
     daily_backup.start()
     update_stats_task.start()
     payment_reminder_task.start()
@@ -122,7 +246,10 @@ async def daily_backup():
 
 @tasks.loop(hours=1)
 async def update_stats_task():
-    await update_stats()
+    try:
+        await update_stats()
+    except Exception as e:
+        print(f"[ERROR] update_stats_task: {e}")
 
 
 @tasks.loop(minutes=10)
@@ -162,26 +289,20 @@ async def check_payment_reminder():
 
 
 async def send_payment_reminder(hours_before):
-    """Send a payment reminder — بطاقة Components V2 بنمط ZEUS."""
+    """Send a payment reminder — بطاقة Components V2 بنمط ZEUS (للشهر النشط)."""
     notify_channel_id = SETTINGS.get("notify_channel_id") or SETTINGS.get("daily_backup_channel_id")
     if not notify_channel_id:
         return
     channel = bot.get_channel(notify_channel_id)
     if not channel:
         return
-    # Gather monthly totals
-    records = await load_visible_records()
-    month_start = datetime.utcnow().replace(day=1)
+    # مجاميع الشهر النشط الحالي (وليس الشهر الميلادي الحتمي)
+    active_key = get_active_month_key()
+    month_label = await get_month_name(active_key)
+    records = await load_visible_records(active_key)
     totals = {}
     for user_id, entries in records.items():
-        user_total = 0
-        for e in entries:
-            try:
-                entry_date = datetime.fromisoformat(e["timestamp"])
-                if entry_date >= month_start:
-                    user_total += e.get("total", 0)
-            except:
-                pass
+        user_total = sum(e.get("total", 0) for e in entries)
         if user_total != 0:
             totals[user_id] = user_total
     total_all = sum(totals.values())
@@ -189,8 +310,9 @@ async def send_payment_reminder(hours_before):
     avatar_url = bot.user.display_avatar.url if bot.user else None
 
     title = "تذكير بموعد الدفع" if hours_before == 24 else "اليوم هو موعد الدفع الشهري"
-    intro = ("تبقى 24 ساعة على موعد الدفع الشهري." if hours_before == 24
-             else "اليوم هو موعد الدفع الشهري.")
+    intro = (f"تبقى 24 ساعة على موعد الدفع الشهري — **{month_label}**."
+             if hours_before == 24
+             else f"اليوم هو موعد الدفع الشهري — **{month_label}**.")
 
     body_lines = [
         intro,
@@ -274,3 +396,4 @@ async def specialty_autocomplete(interaction: discord.Interaction, current: str)
 
 async def custom_setup():
     bot.add_listener(on_command_error, "on_command_error")
+    bot.tree.on_error = on_app_command_error

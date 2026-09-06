@@ -367,17 +367,26 @@ async def delete_work_text(ctx, member: discord.Member = None, number: int = Non
 # /حذف_الكل — يستثني الأعمال المعزولة (قائمة مراحل ✓ في النتيجة)
 # ═══════════════════════════════════════════════════════════════
 async def _delete_all_core(responder, user: discord.abc.User, avatar):
+    """حذف سجلات **الشهر النشط فقط** (غير المعزولة) — شهور أخرى محفوظة.
+    لحذف شهر كامل بسجلاته: /الشهور ← حذف شهر."""
+    active_key = get_active_month_key()
+    active_name = await get_month_name(active_key)
     records = await load_records()
     works = await load_works()
     isolated_names = get_isolated_work_names(works)
 
     total_removed = 0
     preserved_isolated = 0
+    preserved_other_months = 0
     for user_id in list(records.keys()):
-        new_entries = [e for e in records[user_id] if e.get("work_name") in isolated_names]
+        new_entries = [
+            e for e in records[user_id]
+            if e.get("work_name") in isolated_names or not entry_in_month(e, active_key)
+        ]
         removed = len(records[user_id]) - len(new_entries)
         total_removed += removed
-        preserved_isolated += len(new_entries)
+        preserved_isolated += sum(1 for e in new_entries if e.get("work_name") in isolated_names)
+        preserved_other_months += sum(1 for e in new_entries if e.get("work_name") not in isolated_names)
         if new_entries:
             records[user_id] = new_entries
         else:
@@ -386,18 +395,26 @@ async def _delete_all_core(responder, user: discord.abc.User, avatar):
     if total_removed == 0:
         await responder(cards.error_card(
             "لا يوجد ما يُحذف",
-            ["لا توجد سجلات قابلة للحذف (جميعها معزولة أو لا سجلات)."], avatar_url=avatar))
+            [f"لا توجد سجلات قابلة للحذف في **{active_name}** (جميعها معزولة أو لا سجلات)."], avatar_url=avatar))
         return
 
-    await save_records(records)
-    await log_audit("حذف_الكل", user.id, None, f"{total_removed} سجل (استثناء المعزولة: {preserved_isolated})")
+    saved = await save_records(records, allow_wipe=True)
+    if not saved:
+        await responder(cards.error_card(
+            "تعذر الحذف", ["قاعدة البيانات غير متاحة — لم يُحذف أي شيء."], avatar_url=avatar))
+        return
+    await log_audit("حذف_الكل", user.id, None,
+                    f"{total_removed} سجل من شهر {active_key} (معزولة مستثناة: {preserved_isolated})")
     await update_stats()
 
-    checklist = [f"✓ حذف السجلات — {total_removed} سجل"]
+    checklist = [
+        f"✓ حذف سجلات **{active_name}** — {total_removed} سجل",
+        f"✓ سجلات الشهور الأخرى — محفوظة ({preserved_other_months} سجل)",
+    ]
     if preserved_isolated > 0:
         checklist.append(f"⊘ سجلات الأعمال المعزولة — {preserved_isolated} سجل (مُستثناة)")
     children = [
-        cards.header(["## تم حذف السجلات", f"<@{user.id}>"], avatar),
+        cards.header(["## تم حذف سجلات الشهر", f"<@{user.id}>"], avatar),
         cards.sep(2),
         cards.text("\n".join(checklist)),
         cards.sep(),
@@ -406,7 +423,7 @@ async def _delete_all_core(responder, user: discord.abc.User, avatar):
     await responder(cards.Card(cards.ACCENT_GREEN, *children))
 
 
-@bot.tree.command(name="حذف_الكل", description="حذف كل السجلات - للمشرفين (يستثني الأعمال المعزولة)")
+@bot.tree.command(name="حذف_الكل", description="حذف سجلات الشهر النشط فقط - للمشرفين (يستثني المعزولة ويحفظ بقية الشهور)")
 @app_commands.checks.cooldown(1, 10, key=lambda i: (i.user.id, i.command.qualified_name))
 async def delete_all_work_slash(interaction: discord.Interaction):
     avatar = _bot_avatar(interaction.client)
@@ -424,8 +441,9 @@ async def delete_all_work_slash(interaction: discord.Interaction):
         await _delete_all_core(responder, interaction.user, avatar)
 
     await send_confirm_card(
-        interaction, "تأكيد حذف السجلات",
-        "سيتم حذف **كل السجلات** غير المعزولة من كل الأعضاء. لا يمكن التراجع.",
+        interaction, "تأكيد حذف سجلات الشهر",
+        "سيتم حذف سجلات **الشهر النشط فقط** (غير المعزولة) من كل الأعضاء.\n"
+        "سجلات الشهور الأخرى **محفوظة**. لا يمكن التراجع.",
         confirm)
 
 

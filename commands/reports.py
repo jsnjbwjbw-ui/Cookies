@@ -353,8 +353,9 @@ class TopView(BackNav, ui.LayoutView):
 
     async def build_children(self) -> list:
         avatar = _bot_avatar()
+        month_label = await get_month_name(get_active_month_key())
         if self.sort_by == "by_type" and self.current_type is None:
-            subtitle = "اختر التخصص ثم معيار الترتيب."
+            subtitle = f"اختر التخصص ثم معيار الترتيب — لشهر **{month_label}**."
             children: list = [
                 cards.header(["## ترتيب الأعضاء", subtitle], avatar),
                 cards.sep(2),
@@ -371,7 +372,7 @@ class TopView(BackNav, ui.LayoutView):
         else:
             title, lines = await self._ranking_lines()
             children: list = [
-                cards.header(["## ترتيب الأعضاء", title], avatar),
+                cards.header(["## ترتيب الأعضاء", f"{title}\nلشهر **{month_label}**"], avatar),
                 cards.sep(2),
                 cards.text("\n".join(lines)),
             ]
@@ -533,12 +534,17 @@ class MembersHubView(BackNav, ui.LayoutView):
     def _summary_text(self) -> str:
         total_net = sum(r["net_total"] for r in self.rows)
         total_ch = sum(r["chapters"] for r in self.rows)
+        with_work = sum(1 for r in self.rows if not r.get("no_work"))
         return (f"**الأعضاء:** {len(self.rows)}\n"
+                f"**من لهم عمل هذا الشهر:** {with_work}\n"
                 f"**الفصول المحتسبة:** {total_ch}\n"
                 f"**💰 الصافي الإجمالي:** {self.currency}{total_net:,.2f}")
 
     def _member_line(self, i, row) -> str:
         who = f"<@{row['user_id']}>"
+        if row.get("no_work"):
+            return (f"{cards.rank_prefix(i)} {who}\n"
+                    f"-# لا يوجد عمل أو فصول هذا الشهر")
         return (f"{cards.rank_prefix(i)} {who}\n"
                 f"-# {row['chapters']} فصل • {row['works_count']} أعمال • 💰 {self.currency}{row['net_total']:,.2f}")
 
@@ -549,11 +555,12 @@ class MembersHubView(BackNav, ui.LayoutView):
         for row in page_rows:
             member = self.guild.get_member(int(row["user_id"])) if self.guild else None
             name = member.display_name if member else row["display"]
+            desc = ("لا يوجد عمل هذا الشهر" if row.get("no_work")
+                    else f"{row['chapters']} فصول • {self.currency}{row['net_total']:,.2f}")
             options.append(discord.SelectOption(
                 label=cards.clamp(name, 100),
                 value=row["user_id"],
-                description=cards.clamp(
-                    f"{row['chapters']} فصول • {self.currency}{row['net_total']:,.2f}", 100),
+                description=cards.clamp(desc, 100),
                 emoji="👤",
             ))
         return options
@@ -672,8 +679,9 @@ class StatsView(ui.LayoutView):
 
     def _build_children(self) -> list:
         avatar = _member_avatar(self.bot_member)
+        month_label = "الشهر الحالي"
         children: list = [
-            cards.header(["## لوحة الإحصائيات", "مؤشرات الفريق الحية المحدثة تلقائيًا."], avatar),
+            cards.header(["## لوحة الإحصائيات", f"مؤشرات **{month_label}** المحدثة تلقائيًا."], avatar),
             cards.sep(2),
         ]
         children += self._page_children()
@@ -809,7 +817,7 @@ class SpecialtyPickView(BackNav, ui.LayoutView):
                     "لا يوجد أعضاء", [f"لا يوجد أعضاء مسجلون في تخصص `{specialty}`."],
                     avatar_url=_bot_avatar()))
                 return
-            rows = _build_member_finance_rows(filtered, self.guild)
+            rows = await _build_member_finance_rows(filtered, self.guild)
             rows.sort(key=lambda row: (row["chapters"], row["net_total"]), reverse=True)
             view = SpecialtyMembersView(rows, self.guild, SETTINGS.get('currency', '$'),
                                         specialty, back=self.back)
@@ -860,52 +868,56 @@ class DashboardView(ui.LayoutView):
 
     async def _open_members(self):
         records = await load_visible_records()
-        rows = _build_member_finance_rows(records, self.guild)
+        rows = await _build_member_finance_rows(records, self.guild, include_all_members=True)
         if not rows:
             return cards.info_card("لا يوجد أعضاء",
-                                   ["لا توجد سجلات أعضاء بعد — يبدأ العد بأول /تسجيل."],
+                                   ["لا يوجد أعضاء محفوظون بعد — يبدأ العد بأول /تسجيل."],
                                    avatar_url=_bot_avatar())
         return MembersHubView(rows, self.guild, SETTINGS.get('currency', '$'),
                               title="الأعضاء والمستحقات", back=self._as_back)
 
     async def _open_top(self):
-        stat_doc = await stats_collection.find_one({"_id": "stats"}) or {}
+        stat_doc = await get_active_stats_doc()
         return await TopView.create(stat_doc, self.guild, SETTINGS.get('currency', '$'), back=self._as_back)
 
     async def _open_stats(self):
-        stat_doc = await stats_collection.find_one({"_id": "stats"})
+        stat_doc = await get_active_stats_doc()
         if not stat_doc:
             return cards.info_card("لا توجد إحصائيات",
-                                   ["لا توجد إحصائيات بعد."], avatar_url=_bot_avatar())
+                                   ["لا توجد إحصائيات لهذا الشهر بعد."], avatar_url=_bot_avatar())
         return StatsView(stat_doc, self.guild.me, SETTINGS.get('currency', '$'),
                          self.guild, back=self._as_back)
 
     async def _open_payment(self):
         rows, details = await build_payment_rows(self.guild)
         if not rows:
+            month_label = await get_month_name(get_active_month_key())
             return cards.info_card("لا توجد سجلات",
-                                   ["لا توجد أي سجلات لهذا الشهر."], avatar_url=_bot_avatar())
-        return PaymentReportPaginator(rows, details, self.guild,
-                                      SETTINGS.get('currency', '$'), back=self._as_back)
+                                   [f"لا توجد أي سجلات لشهر **{month_label}**."], avatar_url=_bot_avatar())
+        paginator = PaymentReportPaginator(rows, details, self.guild,
+                                           SETTINGS.get('currency', '$'), back=self._as_back)
+        paginator.month_label = await get_month_name(get_active_month_key())
+        return paginator
 
     async def _open_specialty(self):
         return SpecialtyPickView(self.guild, back=self._as_back)
 
+    async def _open_months(self):
+        from commands.months import MonthsHubView
+        return await MonthsHubView.create(self.guild, self.user, back=self._as_back)
+
     async def _open_monthly(self):
-        records = await load_visible_records()
+        active_key = get_active_month_key()
+        records = await load_visible_records(active_key)
         entries = records.get(str(self.user.id), [])
-        # الطوابع الزمنية في السجلات naive UTC — نطابقها لتجنب خطأ المقارنة
-        month_start = datetime.utcnow().replace(day=1)
-        month_entries = [e for e in entries
-                         if (dt := entry_datetime(e)) is not None and dt >= month_start]
-        if not month_entries:
+        if not entries:
             async def _back(interaction: discord.Interaction):
                 parent = await self._as_back()
                 await interaction.response.edit_message(view=parent)
             children = [
                 cards.header(["## الملخص الشهري", f"<@{self.user.id}>"], _bot_avatar()),
                 cards.sep(2),
-                cards.text("لا يوجد عمل مسجل لك منذ بداية الشهر."),
+                cards.text(f"لا يوجد عمل مسجل لك في **{await get_month_name(active_key)}** حتى الآن."),
                 cards.sep(),
                 cards.row(cards.secondary_btn("عودة إلى لوحة التحكم", _back, emoji="↩")),
                 cards.sep(),
@@ -913,26 +925,29 @@ class DashboardView(ui.LayoutView):
             ]
             return cards.Card(cards.ACCENT_GOLD, *children)
         # نفس البطاقة المستخدمة في /ملخص_شهري + زر رجوع إلى اللوحة
-        return build_monthly_summary_card(self.user, month_entries,
+        return build_monthly_summary_card(self.user, entries,
                                           SETTINGS.get('currency', '$'), _bot_avatar(),
-                                          back_factory=self._as_back)
+                                          back_factory=self._as_back,
+                                          month_label=await get_month_name(active_key))
 
     async def build_children(self) -> list:
         avatar = _bot_avatar()
         currency = SETTINGS.get('currency', '$') or '$'
-        records = await load_visible_records()
-        rows = _build_member_finance_rows(records, self.guild)
+        active_key = get_active_month_key()
+        month_label = await get_month_name(active_key)
+        records = await load_visible_records(active_key)
+        rows = await _build_member_finance_rows(records, self.guild, include_all_members=True)
         works = await load_works()
         isolated_count = len(get_isolated_work_names(works))
         total_chapters = sum(r["chapters"] for r in rows)
         total_net = sum(r["net_total"] for r in rows)
-        stat_doc = await stats_collection.find_one({"_id": "stats"}) or {}
-        monthly = stat_doc.get("monthly", {"entries": 0, "amount": 0})
+        with_work = sum(1 for r in rows if not r.get("no_work"))
 
         # صدارة الأعضاء — التاج للمركز الأول فقط، وكل عضو في سطرين مستقلين
-        if rows:
+        work_rows = [r for r in rows if not r.get("no_work")]
+        if work_rows:
             preview_lines = []
-            for k, r in enumerate(rows[:3], 1):
+            for k, r in enumerate(work_rows[:3], 1):
                 preview_lines.append(f"{cards.rank_prefix(k)} {r['mention']}")
                 preview_lines.append(f"-# {r['chapters']} فصل • 💰 {currency}{r['net_total']:,.2f}")
             preview = "\n".join(preview_lines)
@@ -940,10 +955,11 @@ class DashboardView(ui.LayoutView):
             preview = "• لا توجد بيانات بعد."
 
         pulse = (
-            f"**الأعضاء:** {len(rows)}\n"
+            f"**الشهر الحالي:** {month_label} (`{active_key}`)\n"
+            f"**الأعضاء المحفوظون:** {len(rows)}\n"
+            f"**من لهم عمل هذا الشهر:** {with_work}\n"
             f"**الفصول المحتسبة:** {total_chapters}\n"
             f"**💰 إجمالي المستحقات:** {currency}{total_net:,.2f}\n"
-            f"**هذا الشهر:** {monthly.get('entries', 0)} فصل — {currency}{monthly.get('amount', 0):,.2f}\n"
             f"**أعمال معزولة:** {isolated_count}"
         )
 
@@ -951,7 +967,7 @@ class DashboardView(ui.LayoutView):
             cards.header(["## لوحة التحكم",
                           f"<@{self.user.id}> — كل الأدوات بضغطة زر، والأزرار **تُنفّذ مباشرة**."], avatar),
             cards.sep(2),
-            cards.text("### نبضة السيرفر\n" + pulse),
+            cards.text("### نبضة الشهر\n" + pulse),
             cards.sep(),
             cards.text("### صدارة الأعضاء\n" + preview),
             cards.sep(),
@@ -963,6 +979,9 @@ class DashboardView(ui.LayoutView):
             cards.row(
                 cards.secondary_btn("تقرير الدفع", self._swap(self._open_payment)),
                 cards.secondary_btn("أعضاء تخصص", self._swap(self._open_specialty)),
+                cards.secondary_btn("الشهور", self._swap(self._open_months)),
+            ),
+            cards.row(
                 cards.secondary_btn("ملخص شهري", self._swap(self._open_monthly)),
             ),
             cards.sep(),
@@ -997,10 +1016,10 @@ async def projects_report(interaction: discord.Interaction):
 @bot.tree.command(name="احصائيات", description="عرض إحصائيات متقدمة")
 @app_commands.checks.cooldown(1, 5, key=lambda i: (i.user.id, i.command.qualified_name))
 async def stats(interaction: discord.Interaction):
-    stat_doc = await stats_collection.find_one({"_id": "stats"})
+    stat_doc = await get_active_stats_doc()
     if not stat_doc:
         await interaction.response.send_message(view=cards.info_card(
-            "لا توجد إحصائيات", ["لا توجد إحصائيات بعد."], avatar_url=_bot_avatar()), ephemeral=True)
+            "لا توجد إحصائيات", ["لا توجد إحصائيات لهذا الشهر بعد."], avatar_url=_bot_avatar()), ephemeral=True)
         return
 
     view = StatsView(stat_doc, interaction.guild.me, SETTINGS.get('currency', '$'),
@@ -1014,7 +1033,7 @@ async def stats(interaction: discord.Interaction):
 @bot.tree.command(name="توب", description="عرض ترتيب الأعضاء حسب معايير مختلفة")
 @app_commands.checks.cooldown(1, 5, key=lambda i: (i.user.id, i.command.qualified_name))
 async def top_members(interaction: discord.Interaction):
-    stat_doc = await stats_collection.find_one({"_id": "stats"}) or {}
+    stat_doc = await get_active_stats_doc()
     currency = SETTINGS.get('currency', '$') or '$'
     # ⚠️ create() تبني البطاقة كاملة قبل الإرسال — لا رسائل فارغة أبدًا
     view = await TopView.create(stat_doc, interaction.guild, currency, back=None)
@@ -1034,10 +1053,10 @@ async def registered_members(interaction: discord.Interaction, بحث: str = Non
         return
 
     records = await load_visible_records()
-    rows = _build_member_finance_rows(records, interaction.guild, بحث)
+    rows = await _build_member_finance_rows(records, interaction.guild, بحث, include_all_members=True)
     if not rows:
         await interaction.response.send_message(view=cards.info_card(
-            "لا توجد نتائج", ["لا توجد نتائج مطابقة للأعضاء المسجلين."], avatar_url=_bot_avatar()), ephemeral=True)
+            "لا يوجد أعضاء", ["لا يوجد أعضاء محفوظون بعد — يبدأ العد بأول /تسجيل."], avatar_url=_bot_avatar()), ephemeral=True)
         return
     title = "الأعضاء والمستحقات"
     if بحث:
@@ -1063,7 +1082,7 @@ async def specialty_members(interaction: discord.Interaction, التخصص: str)
         matched = [entry for entry in entries if entry.get("work_type") == specialty]
         if matched:
             filtered_records[user_id] = matched
-    rows = _build_member_finance_rows(filtered_records, interaction.guild)
+    rows = await _build_member_finance_rows(filtered_records, interaction.guild)
     rows.sort(key=lambda row: (row["chapters"], row["net_total"]), reverse=True)
     if not rows:
         await interaction.response.send_message(view=cards.info_card(
@@ -1198,18 +1217,26 @@ def _member_name_from_entries(entries):
     return None
 
 
-def _build_member_finance_rows(records, guild, search: str = None):
+async def _build_member_finance_rows(records, guild, search: str = None, include_all_members: bool = False):
+    """النسخة الكاملة: تحل اسم كل عضو (نك نيم السيرفر عبر fetch عند الحاجة)
+    ويمكنها ضم كل الأعضاء المحفوظين حتى أصحاب لا عمل في هذا الشهر (no_work)."""
+    members_docs = {}
+    if include_all_members:
+        members_docs = await load_members()
+    merged = dict(records)
+    for uid in members_docs.keys():
+        merged.setdefault(uid, [])
     rows = []
     search_text = search.lower().strip() if search else None
-    for user_id, entries in records.items():
+    for user_id, entries in merged.items():
         works, bonuses, deductions = _categorize_records(entries)
         work_entries = [entry for work_entries in works.values() for entry in work_entries]
         total_works = sum(entry.get("total", 0) for entry in work_entries)
         total_bonus = sum(entry.get("total", 0) for entry in bonuses)
         total_deduct = sum(abs(entry.get("total", 0)) for entry in deductions)
         net_total = total_works + total_bonus - total_deduct
-        username_hint = _member_name_from_entries(entries)
-        display = member_display_name(guild, int(user_id), username_hint)
+        username_hint = _member_name_from_entries(entries) or members_docs.get(user_id, {}).get("username")
+        display = await resolve_display_name(guild, user_id, username_hint)
         mention = f"<@{user_id}>"
         if search_text and search_text not in display.lower() and search_text not in user_id:
             continue
@@ -1234,8 +1261,10 @@ def _build_member_finance_rows(records, guild, search: str = None):
             "net_total": net_total,
             "work_counts": work_counts,
             "type_counts": dict(type_counts),
+            "no_work": len(entries) == 0,
         })
-    return sorted(rows, key=lambda row: (row["net_total"], row["chapters"]), reverse=True)
+    # العاملون أولاً (الأعلى صافيًا)، ثم أصحاب «لا عمل هذا الشهر»
+    return sorted(rows, key=lambda row: (row["no_work"], -row["net_total"], -row["chapters"]))
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1295,7 +1324,7 @@ async def audit_log(interaction: discord.Interaction):
 @bot.tree.command(name="تقريري", description="تقرير أسبوعي خاص بك")
 @app_commands.checks.cooldown(1, 5, key=lambda i: (i.user.id, i.command.qualified_name))
 async def my_weekly_report(interaction: discord.Interaction):
-    records = await load_visible_records()
+    records = await load_visible_records(None)
     user_id = str(interaction.user.id)
     if user_id not in records:
         await interaction.response.send_message(view=cards.info_card(
