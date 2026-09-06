@@ -1,52 +1,130 @@
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 import discord
 from discord import app_commands
 from discord.ext import commands
 from state import bot
 from helpers.core import *
 from tasks.lifecycle import work_autocomplete, registration_specialty_autocomplete
+from ui import cards
 
-@bot.tree.command(name="تسجيل", description="تسجيل شغل جديد (يدعم الفلترة حسب الأعمال المدفوعة)")
-@app_commands.autocomplete(العمل=work_autocomplete, التخصصات=registration_specialty_autocomplete)
-@app_commands.describe(
-    العمل="اسم العمل (اختر من القائمة)",
-    الفصول="نطاق الفصول مثل 1-5 أو 1,3,5",
-    التخصصات="التخصصات مثل ترجمة كوري-تحرير-تبييض (بدون شرطة سفلية)",
-    ملاحظات="ملاحظات اختيارية"
-)
-@app_commands.checks.cooldown(1, 5, key=lambda i: (i.user.id, i.command.qualified_name))
-async def register_slash(interaction: discord.Interaction, العمل: str, الفصول: str, التخصصات: str, ملاحظات: str = None):
-    if interaction.channel.name not in SETTINGS.get("allowed_channels", []):
-        channels_str = ", ".join([f"#{ch}" for ch in SETTINGS.get("allowed_channels", [])])
-        await interaction.response.send_message(f"❌ استخدم هذا الأمر فقط في أحد الرومات: {channels_str}.", ephemeral=True)
-        return
 
-    work = await get_work(العمل)
+# ═══════════════════════════════════════════════════════════════
+# 🧾 بطاقة إيصال التسجيل — نفس بنية بطاقة العمل في بوت السحب:
+#   رأس Section بصورة البوت + منشن الطالب + سطر التصنيف، فاصل،
+#   شريط تقدم ▰▱ (عند وجود فصول متجاهلة)، قائمة مراحل ✓،
+#   تفاصيل، سطر الإجمالي، وتذييل -# ZEUS.
+# ═══════════════════════════════════════════════════════════════
+def build_receipt_card(
+    *,
+    requester: discord.abc.User,
+    added_by: Optional[discord.abc.User],
+    work_name: str,
+    added_chapters: List[str],
+    total_input_chapters: int,
+    free_count: int,
+    duplicates_skipped: int,
+    filtered_types: List[str],
+    total_amount: float,
+    notes: Optional[str],
+    avatar_url: Optional[str],
+) -> cards.Card:
+    currency = SETTINGS.get('currency', '$') or '$'
+    chapters_str = "، ".join(f"فصل {ch}" for ch in added_chapters) or "—"
+
+    label_line = f"**{work_name}** — {chapters_str}"
+    header_lines = ["## 🧾 إيصال التسجيل جاهز", f"<@{requester.id}>", label_line]
+
+    children: list = [cards.header(header_lines, avatar_url), cards.sep(2)]
+
+    # شريط التقدم — يظهر فقط عند وجود فصول متجاهلة (مجانية/مكررة)
+    skipped = free_count + duplicates_skipped
+    if skipped > 0 or len(added_chapters) != total_input_chapters:
+        children.append(cards.text(cards.progress_line(len(added_chapters), total_input_chapters)))
+        children.append(cards.sep())
+
+    # قائمة المراحل ✓ — نفس رموز بوت السحب
+    check: List[str] = []
+    check.append(f"✓ فحص العمل — «{work_name}»")
+    filtered_note = f"{len(added_chapters) + duplicates_skipped} فصول مدفوعة"
+    if free_count > 0:
+        filtered_note += f" — {free_count} مجانية تجاهلت"
+    check.append(f"✓ فلترة الفصول — {filtered_note}")
+    check.append(f"✓ تسجيل الفصول — {len(added_chapters)} سجل جديد")
+    check.append(f"✓ حساب المستحق — {currency}{total_amount:.2f}")
+    children.append(cards.text("\n".join(check)))
+
+    # تفاصيل التخصصات
+    if len(set(filtered_types)) == 1:
+        children += [cards.sep(), cards.text(f"**التخصص:** {filtered_types[0]}")]
+    else:
+        types_summary = "\n".join(f"• فصل {ch}: {t}" for ch, t in zip(added_chapters, filtered_types))
+        children += [cards.sep(), cards.text(f"**تفاصيل التخصصات**\n{cards.clamp(types_summary, 900)}")]
+
+    # سطر النتيجة النهائية
+    final_lines = [f"**الإجمالي:** {currency}{total_amount:.2f}"]
+    if added_by and added_by.id != requester.id:
+        final_lines.append(f"**🛡️ أضيف بواسطة:** <@{added_by.id}>")
+    if notes:
+        final_lines.append(f"**📝 ملاحظات:** {cards.clamp(notes, 300)}")
+    now = datetime.utcnow()
+    final_lines.append(f"**📅 تاريخ العملية:** {now.strftime('%Y-%m-%d %I:%M %p')} UTC")
+    children += [cards.sep(), cards.text("\n".join(final_lines))]
+
+    children += [cards.sep(), cards.text(f"-# {cards.BOT_SIGNATURE}")]
+    return cards.Card(cards.ACCENT_GOLD, *children)
+
+
+# ═══════════════════════════════════════════════════════════════
+# ⚙️ منطق التسجيل المشترك (نفس فلسفة بوت السحب: فحص ← فلترة ←
+#   تسجيل ← حساب، مع بطاقة فشل حمراء لكل سبب رفض)
+# ═══════════════════════════════════════════════════════════════
+async def validate_registration(
+    interaction: discord.Interaction,
+    work_name: str,
+    chapters_input: str,
+    types_input: str,
+) -> tuple:
+    """يرجع (work, chapters_list, paid_chapters, free_count, filtered_types) أو (None,...,error_card)."""
+    avatar_url = interaction.client.user.display_avatar.url if interaction.client.user else None
+
+    work = await get_work(work_name)
     if not work:
-        await interaction.response.send_message(f"❌ العمل `{العمل}` غير موجود في قائمة الأعمال المدفوعة. تواصل مع الإدارة.", ephemeral=True)
-        return
+        return None, None, None, 0, None, cards.error_card(
+            "❌ تعذر بدء التسجيل",
+            [f"العمل `{work_name}` غير موجود في قائمة الأعمال المدفوعة. تواصل مع الإدارة."],
+            avatar_url=avatar_url)
     if not work.get("active", True):
-        await interaction.response.send_message(f"❌ العمل `{العمل}` معطل حالياً.", ephemeral=True)
-        return
+        return None, None, None, 0, None, cards.error_card(
+            "❌ تعذر بدء التسجيل",
+            [f"العمل `{work_name}` معطل حالياً."],
+            avatar_url=avatar_url)
     if is_work_isolated(work):
-        await interaction.response.send_message(f"⏸️ العمل `{العمل}` معزول حالياً عن التسجيل والحسابات حتى تسترجعه الإدارة.", ephemeral=True)
-        return
+        return None, None, None, 0, None, cards.error_card(
+            "❌ تعذر بدء التسجيل",
+            [f"العمل `{work_name}` معزول حالياً عن التسجيل والحسابات حتى تسترجعه الإدارة."],
+            avatar_url=avatar_url)
 
-    chapters_list = parse_chapter_range(الفصول)
+    chapters_list = parse_chapter_range(chapters_input)
     if not chapters_list:
-        await interaction.response.send_message("❌ نطاق الفصول غير صالح.", ephemeral=True)
-        return
+        return None, None, None, 0, None, cards.error_card(
+            "❌ تعذر بدء التسجيل",
+            ["نطاق الفصول غير صالح. استخدم مثلاً `5` أو `1-5` أو `1,3,5`."],
+            avatar_url=avatar_url)
 
     paid_chapters, free_count = filter_paid_chapters(work, chapters_list)
     if not paid_chapters:
-        await interaction.response.send_message("⚠️ جميع الفصول المدخلة مجانية ولم تُسجّل.", ephemeral=True)
-        return
+        return None, None, None, 0, None, cards.error_card(
+            "⚠️ جميع الفصول مجانية",
+            ["جميع الفصول المدخلة مجانية ولم تُسجّل."],
+            avatar_url=avatar_url)
 
-    original_types = parse_mixed_types(التخصصات, len(chapters_list))
+    original_types = parse_mixed_types(types_input, len(chapters_list))
     if original_types is None:
-        await interaction.response.send_message(f"❌ عدد التخصصات لا يتطابق مع عدد الفصول ({len(chapters_list)}).", ephemeral=True)
-        return
+        return None, None, None, 0, None, cards.error_card(
+            "❌ تعذر بدء التسجيل",
+            [f"عدد التخصصات لا يتطابق مع عدد الفصول ({len(chapters_list)})."],
+            avatar_url=avatar_url)
 
     mapped_types = [map_type(t) for t in original_types]
 
@@ -56,23 +134,50 @@ async def register_slash(interaction: discord.Interaction, العمل: str, ال
         if ch in kept_set:
             filtered_types.append(mapped_types[idx])
 
-    # التحقق من صحة التخصصات: إذا العمل له تخصصات مخصصة، يجب أن تكون التخصصات المدخلة ضمنها
+    # التحقق من صحة التخصصات
     if "custom_prices" in work and isinstance(work["custom_prices"], dict):
         allowed_specs = list(work["custom_prices"].keys())
         for t in filtered_types:
             if t not in allowed_specs:
-                await interaction.response.send_message(
-                    f"❌ التخصص `{t}` غير مسموح به في عمل `{العمل}`.\n"
-                    f"التخصصات المتاحة لهذا العمل: {', '.join(allowed_specs)}",
-                    ephemeral=True
-                )
-                return
+                return None, None, None, 0, None, cards.error_card(
+                    "❌ تعذر بدء التسجيل",
+                    [f"التخصص `{t}` غير مسموح به في عمل `{work_name}`.\n"
+                     f"التخصصات المتاحة لهذا العمل: {', '.join(allowed_specs)}"],
+                    avatar_url=avatar_url)
     else:
-        # إذا العمل ليس له تخصصات مخصصة، نتحقق من التخصصات العامة
         for t in filtered_types:
             if t not in PRICES:
-                await interaction.response.send_message(f"❌ التخصص `{t}` غير صحيح. التخصصات المتاحة: {', '.join(PRICES.keys())}", ephemeral=True)
-                return
+                return None, None, None, 0, None, cards.error_card(
+                    "❌ تعذر بدء التسجيل",
+                    [f"التخصص `{t}` غير صحيح. التخصصات المتاحة: {', '.join(PRICES.keys())}"],
+                    avatar_url=avatar_url)
+
+    return work, chapters_list, paid_chapters, free_count, filtered_types, None
+
+
+# ═══════════════════════════════════════════════════════════════
+# أوامر التسجيل
+# ═══════════════════════════════════════════════════════════════
+@bot.tree.command(name="تسجيل", description="تسجيل فصول منجزة واستلام إيصال جاهز بالحساب")
+@app_commands.autocomplete(العمل=work_autocomplete, التخصصات=registration_specialty_autocomplete)
+@app_commands.describe(
+    العمل="اسم العمل (اختر من القائمة)",
+    الفصول="نطاق الفصول مثل 1-5 أو 1,3,5",
+    التخصصات="التخصصات مثل ترجمة كوري-تحرير-تبييض (بدون شرطة سفلية)",
+    ملاحظات="ملاحظات اختيارية"
+)
+@app_commands.checks.cooldown(1, 5, key=lambda i: (i.user.id, i.command.qualified_name))
+async def register_slash(interaction: discord.Interaction, العمل: str, الفصول: str, التخصصات: str, ملاحظات: str = None):
+    avatar_url = interaction.client.user.display_avatar.url if interaction.client.user else None
+    if interaction.channel.name not in SETTINGS.get("allowed_channels", []):
+        await interaction.response.send_message(view=cards.channel_card(SETTINGS.get("allowed_channels", []), avatar_url), ephemeral=True)
+        return
+
+    work, chapters_list, paid_chapters, free_count, filtered_types, error_card = await validate_registration(
+        interaction, العمل, الفصول, التخصصات)
+    if error_card is not None:
+        await interaction.response.send_message(view=error_card, ephemeral=True)
+        return
 
     records = await load_records()
     user_id = str(interaction.user.id)
@@ -81,11 +186,12 @@ async def register_slash(interaction: discord.Interaction, العمل: str, ال
 
     added_chapters_list = []
     username = interaction.user.name
+    duplicates_skipped = 0
     for idx, ch in enumerate(paid_chapters):
         work_type = filtered_types[idx]
         if is_duplicate(records, user_id, العمل, ch, work_type):
+            duplicates_skipped += 1
             continue
-        # استخدام السعر المخصص للعمل إن وجد، وإلا السعر العام
         total = await get_specialty_price(العمل, work_type)
         records[user_id].append({
             "work_name": العمل,
@@ -100,45 +206,34 @@ async def register_slash(interaction: discord.Interaction, العمل: str, ال
 
     added = len(added_chapters_list)
     if added == 0:
-        await interaction.response.send_message("⚠️ لم يتم إضافة أي فصل جديد (جميع الفصول إما مكررة أو مجانية).", ephemeral=True)
+        await interaction.response.send_message(view=cards.error_card(
+            "⚠️ لم يُسجّل شيء جديد",
+            ["لم يتم إضافة أي فصل جديد (جميع الفصول إما مكررة أو مجانية)."],
+            avatar_url=avatar_url), ephemeral=True)
         return
 
     await save_records(records)
     await update_stats()
 
-    # Embed موحد (بدون وصف، بدون حقل الحالة، التاريخ بالنهاية بنظام 12 ساعة)
-    embed = make_embed("finance", "🧾 إيصال تسجيل العمل", "", interaction, interaction.user)
-    embed.color = discord.Color.gold()
-    embed.set_footer(text="ZEUS", icon_url=interaction.client.user.display_avatar.url)
-
-    embed.add_field(name="👤 العضو", value=interaction.user.mention, inline=True)
-    embed.add_field(name="📖 العمل", value=العمل, inline=True)
-
-    chapters_str = ", ".join(str(ch) for ch in added_chapters_list)
-    embed.add_field(name="📋 الفصل المضاف", value=chapters_str, inline=False)
-    embed.add_field(name="🔢 إجمالي الفصول", value=str(added), inline=True)
-
-    if free_count > 0:
-        embed.add_field(name="⏭️ فصول مجانية تم تجاهلها", value=str(free_count), inline=True)
-
     if len(set(filtered_types)) == 1:
-        embed.add_field(name="🛠️ التخصص", value=filtered_types[0], inline=True)
         total_amount = added * await get_specialty_price(العمل, filtered_types[0])
     else:
         total_amount = sum(await get_specialty_price(العمل, t) for t in filtered_types)
-        types_summary = "\n".join([f"فصل {ch}: {t}" for ch, t in zip(paid_chapters, filtered_types)])
-        embed.add_field(name="🛠️ تفاصيل التخصصات", value=types_summary, inline=False)
-    embed.add_field(name="💰 الإجمالي", value=f"{SETTINGS.get('currency', '$')}{total_amount:.2f}", inline=True)
 
-    if ملاحظات:
-        embed.add_field(name="📝 ملاحظات", value=ملاحظات, inline=False)
-
-    # تاريخ العملية في النهاية وبنظام 12 ساعة
-    now = datetime.utcnow()
-    time_str = now.strftime("%Y-%m-%d %I:%M %p UTC")
-    embed.add_field(name="📅 تاريخ العملية", value=time_str, inline=False)
-
-    await interaction.response.send_message(embed=embed)
+    receipt = build_receipt_card(
+        requester=interaction.user,
+        added_by=None,
+        work_name=العمل,
+        added_chapters=added_chapters_list,
+        total_input_chapters=len(chapters_list),
+        free_count=free_count,
+        duplicates_skipped=duplicates_skipped,
+        filtered_types=filtered_types,
+        total_amount=total_amount,
+        notes=ملاحظات,
+        avatar_url=avatar_url,
+    )
+    await interaction.response.send_message(view=receipt)
 
     notify_channel_id = SETTINGS.get("notify_channel_id")
     if notify_channel_id:
@@ -154,16 +249,17 @@ async def register_slash(interaction: discord.Interaction, العمل: str, ال
         except:
             pass
 
-# ----------------------------------------------------------------------
-# أمر /تسجيل_للغير (موحد مع نفس التصميم)
-# ----------------------------------------------------------------------
+
+# ═══════════════════════════════════════════════════════════════
+# أمر /تسجيل_للغير — نفس الإيصال مع سطر «أضيف بواسطة»
+# ═══════════════════════════════════════════════════════════════
 @bot.tree.command(name="تسجيل_للغير", description="تسجيل شغل لعضو معين (للمشرفين فقط)")
 @app_commands.autocomplete(العمل=work_autocomplete, التخصصات=registration_specialty_autocomplete)
 @app_commands.describe(
     عضو="العضو الذي تريد تسجيل الشغل له",
     العمل="اسم العمل (يجب أن يكون موجوداً في القائمة)",
     الفصول="نطاق الفصول مثل 1-5 أو 1,3,5",
-    التخصصات="التخصصات مثل ترجمة كوري-تحرير-تبييض",
+    التخصصات="التخصصات مثل ترجمة كوري-تحرير",
     ملاحظات="ملاحظات اختيارية"
 )
 @app_commands.checks.cooldown(1, 5, key=lambda i: (i.user.id, i.command.qualified_name))
@@ -175,66 +271,20 @@ async def register_for_member(
     التخصصات: str,
     ملاحظات: str = None
 ):
+    avatar_url = interaction.client.user.display_avatar.url if interaction.client.user else None
     if not is_admin(interaction):
         await log_unauthorized(interaction.user.id, "تسجيل_للغير")
-        await interaction.response.send_message("❌ ما عندك صلاحية تستخدم هذا الأمر.", ephemeral=True)
+        await interaction.response.send_message(view=cards.permission_card(avatar_url), ephemeral=True)
         return
     if interaction.channel.name not in SETTINGS.get("allowed_channels", []):
-        channels_str = ", ".join([f"#{ch}" for ch in SETTINGS.get("allowed_channels", [])])
-        await interaction.response.send_message(f"❌ استخدم هذا الأمر فقط في أحد الرومات: {channels_str}.", ephemeral=True)
+        await interaction.response.send_message(view=cards.channel_card(SETTINGS.get("allowed_channels", []), avatar_url), ephemeral=True)
         return
 
-    work = await get_work(العمل)
-    if not work:
-        await interaction.response.send_message(f"❌ العمل `{العمل}` غير موجود في قائمة الأعمال المدفوعة.", ephemeral=True)
+    work, chapters_list, paid_chapters, free_count, filtered_types, error_card = await validate_registration(
+        interaction, العمل, الفصول, التخصصات)
+    if error_card is not None:
+        await interaction.response.send_message(view=error_card, ephemeral=True)
         return
-    if not work.get("active", True):
-        await interaction.response.send_message(f"❌ العمل `{العمل}` معطل حالياً ولا يمكن إضافة فصول إليه.", ephemeral=True)
-        return
-    if is_work_isolated(work):
-        await interaction.response.send_message(f"⏸️ العمل `{العمل}` معزول حالياً عن التسجيل والحسابات حتى تسترجعه الإدارة.", ephemeral=True)
-        return
-
-    chapters_list = parse_chapter_range(الفصول)
-    if not chapters_list:
-        await interaction.response.send_message("❌ نطاق الفصول غير صالح. استخدم مثلاً `5` أو `1-5` أو `1,3,5`.", ephemeral=True)
-        return
-
-    paid_chapters, free_count = filter_paid_chapters(work, chapters_list)
-    if not paid_chapters:
-        await interaction.response.send_message("⚠️ جميع الفصول المدخلة مجانية ولم تُسجّل.", ephemeral=True)
-        return
-
-    types_list = parse_mixed_types(التخصصات, len(chapters_list))
-    if types_list is None:
-        await interaction.response.send_message(f"❌ عدد التخصصات لا يتطابق مع عدد الفصول ({len(chapters_list)}).", ephemeral=True)
-        return
-
-    mapped_types = [map_type(t) for t in types_list]
-
-    filtered_types = []
-    kept_set = set(paid_chapters)
-    for idx, ch in enumerate(chapters_list):
-        if ch in kept_set:
-            filtered_types.append(mapped_types[idx])
-
-    # التحقق من صحة التخصصات: إذا العمل له تخصصات مخصصة، يجب أن تكون التخصصات المدخلة ضمنها
-    if "custom_prices" in work and isinstance(work["custom_prices"], dict):
-        allowed_specs = list(work["custom_prices"].keys())
-        for t in filtered_types:
-            if t not in allowed_specs:
-                await interaction.response.send_message(
-                    f"❌ التخصص `{t}` غير مسموح به في عمل `{العمل}`.\n"
-                    f"التخصصات المتاحة لهذا العمل: {', '.join(allowed_specs)}",
-                    ephemeral=True
-                )
-                return
-    else:
-        # إذا العمل ليس له تخصصات مخصصة، نتحقق من التخصصات العامة
-        for t in filtered_types:
-            if t not in PRICES:
-                await interaction.response.send_message(f"❌ التخصص `{t}` غير صحيح. التخصصات المسموحة: {', '.join(PRICES.keys())}", ephemeral=True)
-                return
 
     records = await load_records()
     user_id = str(عضو.id)
@@ -243,11 +293,12 @@ async def register_for_member(
 
     added_chapters_list = []
     username = عضو.name
+    duplicates_skipped = 0
     for idx, ch in enumerate(paid_chapters):
         work_type = filtered_types[idx]
         if is_duplicate(records, user_id, العمل, ch, work_type):
+            duplicates_skipped += 1
             continue
-        # استخدام السعر المخصص للعمل إن وجد، وإلا السعر العام
         total = await get_specialty_price(العمل, work_type)
         records[user_id].append({
             "work_name": العمل,
@@ -263,45 +314,34 @@ async def register_for_member(
 
     added = len(added_chapters_list)
     if added == 0:
-        await interaction.response.send_message("⚠️ لم يتم إضافة أي فصل جديد (جميع الفصول مكررة).", ephemeral=True)
+        await interaction.response.send_message(view=cards.error_card(
+            "⚠️ لم يُسجّل شيء جديد",
+            ["لم يتم إضافة أي فصل جديد (جميع الفصول مكررة)."],
+            avatar_url=avatar_url), ephemeral=True)
         return
 
     await save_records(records)
     await update_stats()
 
-    # Embed موحد (نفس تصميم /تسجيل)
-    embed = make_embed("finance", "🧾 إيصال تسجيل العمل", "", interaction, interaction.user)
-    embed.color = discord.Color.gold()
-    embed.set_footer(text="ZEUS", icon_url=interaction.client.user.display_avatar.url)
-
-    embed.add_field(name="👤 العضو", value=عضو.mention, inline=True)
-    embed.add_field(name="🛡️ أضيف بواسطة", value=interaction.user.mention, inline=True)
-    embed.add_field(name="📖 العمل", value=العمل, inline=True)
-
-    chapters_str = ", ".join(str(ch) for ch in added_chapters_list)
-    embed.add_field(name="📋 الفصل المضاف", value=chapters_str, inline=False)
-    embed.add_field(name="🔢 إجمالي الفصول", value=str(added), inline=True)
-
-    if free_count > 0:
-        embed.add_field(name="⏭️ فصول مجانية تم تجاهلها", value=str(free_count), inline=True)
-
     if len(set(filtered_types)) == 1:
-        embed.add_field(name="🛠️ التخصص", value=filtered_types[0], inline=True)
         total_amount = added * await get_specialty_price(العمل, filtered_types[0])
     else:
         total_amount = sum(await get_specialty_price(العمل, t) for t in filtered_types)
-        types_summary = "\n".join([f"فصل {ch}: {t}" for ch, t in zip(paid_chapters, filtered_types)])
-        embed.add_field(name="🛠️ تفاصيل التخصصات", value=types_summary, inline=False)
-    embed.add_field(name="💰 الإجمالي", value=f"{SETTINGS.get('currency', '$')}{total_amount:.2f}", inline=True)
 
-    if ملاحظات:
-        embed.add_field(name="📝 ملاحظات", value=ملاحظات, inline=False)
-
-    now = datetime.utcnow()
-    time_str = now.strftime("%Y-%m-%d %I:%M %p UTC")
-    embed.add_field(name="📅 تاريخ العملية", value=time_str, inline=False)
-
-    await interaction.response.send_message(embed=embed)
+    receipt = build_receipt_card(
+        requester=عضو,
+        added_by=interaction.user,
+        work_name=العمل,
+        added_chapters=added_chapters_list,
+        total_input_chapters=len(chapters_list),
+        free_count=free_count,
+        duplicates_skipped=duplicates_skipped,
+        filtered_types=filtered_types,
+        total_amount=total_amount,
+        notes=ملاحظات,
+        avatar_url=avatar_url,
+    )
+    await interaction.response.send_message(view=receipt)
 
     notify_channel_id = SETTINGS.get("notify_channel_id")
     if notify_channel_id:
@@ -317,86 +357,56 @@ async def register_for_member(
     except:
         pass
 
-# ----------------------------------------------------------------------
-# أمر !تحليل (موحد تماماً مع أوامر السلاش)
-# ----------------------------------------------------------------------
+
+# ═══════════════════════════════════════════════════════════════
+# أمر !تحليل — بنفس التصميم الموحد + بطاقة طلب المدخلات بنمط ZEUS
+# ═══════════════════════════════════════════════════════════════
 @bot.command(name="تحليل")
 @commands.cooldown(1, 5, commands.BucketType.user)
-async def analysis(ctx, *, text=None):
-    if not text:
-        await ctx.send(
-            "**📝 الصيغة:**\n"
-            "```text\n"
-            "!تحليل\n"
-            "العمل: اسم العمل\n"
-            "الفصل: رقم الفصل  أو  نطاق الفصول (مثل 1-5)\n"
-            "التخصص: تخصص واحد  أو  تخصصات مفصولة بـ - (مثل ترجمة كوري-تحرير)\n"
-            "ملاحظات: اختياري\n"
-            "```\n"
-            "**التخصصات المتاحة:** " + "، ".join(PRICES.keys())
+async def analysis(ctx, *, text_input=None):
+    avatar_url = ctx.bot.user.display_avatar.url if ctx.bot.user else None
+
+    if not text_input:
+        # بطاقة طلب المدخلات — نفس بنية بطاقات «أرسل … خلال دقيقتين» في بوت السحب
+        available = "، ".join(PRICES.keys()) or "لا توجد تخصصات"
+        prompt = cards.info_card(
+            "✍️ أرسل بيانات التسجيل",
+            [
+                "**1.** اكتب سطر `العمل:` باسم العمل كما يظهر في /الأعمال.",
+                "**2.** اكتب سطر `الفصل:` برقم أو نطاق مثل `1-5`.",
+                "**3.** اكتب سطر `التخصص:` مثل `ترجمة كوري-تحرير`، واختياريًا سطر `ملاحظات:`.",
+                f"**التخصصات المتاحة:** {available}",
+                "-# مثال:\nالعمل: اسم العمل\nالفصل: 1-5\nالتخصص: تحرير",
+            ],
+            avatar_url=avatar_url,
         )
+        await ctx.send(view=prompt)
         return
 
-    fields = parse_fields(text)
+    fields = parse_fields(text_input)
     work_name = fields.get("العمل") or fields.get("اسم العمل")
     chapter_str = fields.get("الفصل") or fields.get("رقم الفصل")
     types_str = fields.get("التخصص") or fields.get("الشغل")
     notes = fields.get("ملاحظات", "")
 
     if not work_name or not chapter_str or not types_str:
-        await ctx.send("❌ فيه بيانات ناقصة. لازم تكتب: `العمل`، `الفصل`، `التخصص`")
+        await ctx.send(view=cards.error_card(
+            "❌ تعذر بدء التسجيل",
+            ["فيه بيانات ناقصة. لازم تكتب: `العمل`، `الفصل`، `التخصص`."],
+            avatar_url=avatar_url))
         return
 
-    work = await get_work(work_name)
-    if not work:
-        await ctx.send(f"❌ العمل `{work_name}` غير موجود في قائمة الأعمال المدفوعة.")
-        return
-    if not work.get("active", True):
-        await ctx.send(f"❌ العمل `{work_name}` معطل حالياً.")
-        return
-    if is_work_isolated(work):
-        await ctx.send(f"⏸️ العمل `{work_name}` معزول حالياً عن التسجيل والحسابات حتى تسترجعه الإدارة.")
-        return
+    class _CtxLike:
+        """غلاف بسيط لإعادة استخدام validate_registration مع ctx."""
+        def __init__(self, ctx):
+            self.client = ctx.bot
+            self.user = ctx.author
 
-    chapters_list = parse_chapter_range(chapter_str)
-    if not chapters_list:
-        await ctx.send("❌ نطاق الفصول غير صالح.")
+    work, chapters_list, paid_chapters, free_count, filtered_types, error_card = await validate_registration(
+        _CtxLike(ctx), work_name, chapter_str, types_str)
+    if error_card is not None:
+        await ctx.send(view=error_card)
         return
-
-    paid_chapters, free_count = filter_paid_chapters(work, chapters_list)
-    if not paid_chapters:
-        await ctx.send("⚠️ جميع الفصول المدخلة مجانية ولم تُسجّل.")
-        return
-
-    original_types = parse_mixed_types(types_str, len(chapters_list))
-    if original_types is None:
-        await ctx.send(f"❌ عدد التخصصات لا يتطابق مع عدد الفصول ({len(chapters_list)}).")
-        return
-
-    mapped_types = [map_type(t) for t in original_types]
-
-    filtered_types = []
-    kept_set = set(paid_chapters)
-    for idx, ch in enumerate(chapters_list):
-        if ch in kept_set:
-            filtered_types.append(mapped_types[idx])
-
-    # التحقق من صحة التخصصات: إذا العمل له تخصصات مخصصة، يجب أن تكون التخصصات المدخلة ضمنها
-    if "custom_prices" in work and isinstance(work["custom_prices"], dict):
-        allowed_specs = list(work["custom_prices"].keys())
-        for t in filtered_types:
-            if t not in allowed_specs:
-                await ctx.send(
-                    f"❌ التخصص `{t}` غير مسموح به في عمل `{work_name}`.\n"
-                    f"التخصصات المتاحة لهذا العمل: {', '.join(allowed_specs)}"
-                )
-                return
-    else:
-        # إذا العمل ليس له تخصصات مخصصة، نتحقق من التخصصات العامة
-        for t in filtered_types:
-            if t not in PRICES:
-                await ctx.send(f"❌ التخصص `{t}` غير صحيح. التخصصات: {', '.join(PRICES.keys())}")
-                return
 
     records = await load_records()
     user_id = str(ctx.author.id)
@@ -405,11 +415,12 @@ async def analysis(ctx, *, text=None):
 
     added_chapters_list = []
     username = ctx.author.name
+    duplicates_skipped = 0
     for idx, ch in enumerate(paid_chapters):
         work_type = filtered_types[idx]
         if is_duplicate(records, user_id, work_name, ch, work_type):
+            duplicates_skipped += 1
             continue
-        # استخدام السعر المخصص للعمل إن وجد، وإلا السعر العام
         total = await get_specialty_price(work_name, work_type)
         records[user_id].append({
             "work_name": work_name,
@@ -424,48 +435,34 @@ async def analysis(ctx, *, text=None):
 
     added = len(added_chapters_list)
     if added == 0:
-        await ctx.send("⚠️ لم يتم إضافة أي فصل جديد (جميع الفصول مكررة).")
+        await ctx.send(view=cards.error_card(
+            "⚠️ لم يُسجّل شيء جديد",
+            ["لم يتم إضافة أي فصل جديد (جميع الفصول مكررة)."],
+            avatar_url=avatar_url))
         return
 
     await save_records(records)
     await update_stats()
 
-    # Embed مطابق تماماً لتصميم /تسجيل
-    embed = discord.Embed(
-        title="🧾 إيصال تسجيل العمل",
-        color=discord.Color.gold()
-    )
-    embed.set_author(name=ctx.author.display_name, icon_url=ctx.author.display_avatar.url)
-    embed.set_footer(text="ZEUS", icon_url=ctx.bot.user.display_avatar.url)
-
-    embed.add_field(name="👤 العضو", value=ctx.author.mention, inline=True)
-    embed.add_field(name="📖 العمل", value=work_name, inline=True)
-
-    chapters_str = ", ".join(str(ch) for ch in added_chapters_list)
-    embed.add_field(name="📋 الفصل المضاف", value=chapters_str, inline=False)
-    embed.add_field(name="🔢 إجمالي الفصول", value=str(added), inline=True)
-
-    if free_count > 0:
-        embed.add_field(name="⏭️ فصول مجانية تم تجاهلها", value=str(free_count), inline=True)
-
     if len(set(filtered_types)) == 1:
-        embed.add_field(name="🛠️ التخصص", value=filtered_types[0], inline=True)
         total_amount = added * await get_specialty_price(work_name, filtered_types[0])
     else:
         total_amount = sum(await get_specialty_price(work_name, t) for t in filtered_types)
-        types_summary = "\n".join([f"فصل {ch}: {t}" for ch, t in zip(paid_chapters, filtered_types)])
-        embed.add_field(name="🛠️ تفاصيل التخصصات", value=types_summary, inline=False)
-    embed.add_field(name="💰 الإجمالي", value=f"{SETTINGS.get('currency', '$')}{total_amount:.2f}", inline=True)
 
-    if notes:
-        embed.add_field(name="📝 ملاحظات", value=notes, inline=False)
-
-    # تاريخ العملية في النهاية وبنظام 12 ساعة
-    now = datetime.utcnow()
-    time_str = now.strftime("%Y-%m-%d %I:%M %p UTC")
-    embed.add_field(name="📅 تاريخ العملية", value=time_str, inline=False)
-
-    await ctx.send(embed=embed)
+    receipt = build_receipt_card(
+        requester=ctx.author,
+        added_by=None,
+        work_name=work_name,
+        added_chapters=added_chapters_list,
+        total_input_chapters=len(chapters_list),
+        free_count=free_count,
+        duplicates_skipped=duplicates_skipped,
+        filtered_types=filtered_types,
+        total_amount=total_amount,
+        notes=notes,
+        avatar_url=avatar_url,
+    )
+    await ctx.send(view=receipt)
 
     notify_channel_id = SETTINGS.get("notify_channel_id")
     if notify_channel_id:

@@ -1,6 +1,6 @@
 import json
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List
 
 import discord
@@ -10,6 +10,11 @@ from discord import app_commands
 from state import bot
 from database import mongo_client
 from helpers.core import *
+from ui import cards
+
+BOT_NAME = "ZEUS"
+BOT_PRESENCE = "ZEUS | /مساعدة"
+
 
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
@@ -21,9 +26,25 @@ async def on_command_error(ctx, error):
         return
     await ctx.send(f"⚠️ صار خطأ: `{error}`")
 
+
 @bot.event
 async def on_ready():
     print(f"[LOG] Logged in as {bot.user}")
+    # ── هوية ZEUS: نفس سلوك بوت السحب (اسم + حالة + نشاط) ──
+    try:
+        if bot.user and bot.user.name != BOT_NAME:
+            await bot.user.edit(username=BOT_NAME)
+            print(f"[LOG] Bot username set to {BOT_NAME}")
+    except Exception as e:
+        print(f"[WARNING] Could not set username: {e}")
+    try:
+        await bot.change_presence(
+            status=discord.Status.online,
+            activity=discord.Activity(type=discord.ActivityType.watching, name=BOT_PRESENCE),
+        )
+    except Exception as e:
+        print(f"[WARNING] Could not set presence: {e}")
+
     loaded_settings = await load_settings()
     SETTINGS.clear()
     SETTINGS.update(loaded_settings)
@@ -42,6 +63,7 @@ async def on_ready():
     update_stats_task.start()
     payment_reminder_task.start()
 
+
 @bot.check
 async def only_allowed_channel(ctx):
     if ctx.author.bot:
@@ -52,8 +74,10 @@ async def only_allowed_channel(ctx):
     await ctx.send(f"❌ استخدم أوامر البوت فقط في أحد الرومات: {channels_str}.")
     return False
 
+
 def is_admin(interaction: discord.Interaction) -> bool:
     return interaction.user.guild_permissions.manage_messages
+
 
 @tasks.loop(hours=24)
 async def daily_backup():
@@ -70,13 +94,16 @@ async def daily_backup():
     file = discord.File(BytesIO(data.encode('utf-8')), filename=f"backup_{datetime.utcnow().date()}.json")
     await channel.send(f"📦 نسخة احتياطية يومية - {datetime.utcnow().date()}", file=file)
 
+
 @tasks.loop(hours=1)
 async def update_stats_task():
     await update_stats()
 
+
 @tasks.loop(minutes=10)
 async def payment_reminder_task():
     await check_payment_reminder()
+
 
 async def check_payment_reminder():
     """Check if it's time to send payment reminders."""
@@ -108,8 +135,9 @@ async def check_payment_reminder():
         SETTINGS["payment_day_sent"] = False
         await save_settings(SETTINGS)
 
+
 async def send_payment_reminder(hours_before):
-    """Send a payment reminder message."""
+    """Send a payment reminder — بطاقة Components V2 بنمط ZEUS."""
     notify_channel_id = SETTINGS.get("notify_channel_id") or SETTINGS.get("daily_backup_channel_id")
     if not notify_channel_id:
         return
@@ -132,16 +160,24 @@ async def send_payment_reminder(hours_before):
         if user_total != 0:
             totals[user_id] = user_total
     total_all = sum(totals.values())
-    embed = discord.Embed(title="🔔 تذكير بموعد الدفع", color=discord.Color.orange())
-    if hours_before == 24:
-        embed.description = "⏰ تبقى 24 ساعة على موعد الدفع الشهري"
-    else:
-        embed.description = "📅 اليوم هو موعد الدفع الشهري"
-    embed.add_field(name="إجمالي المبلغ المستحق", value=f"{SETTINGS.get('currency', '$')}{total_all:.2f}", inline=False)
-    top5 = sorted(totals.items(), key=lambda x: x[1], reverse=True)[:5]
-    top_str = "\n".join([f"<@{uid}>: {SETTINGS.get('currency', '$')}{amt:.2f}" for uid, amt in top5])
-    embed.add_field(name="أعلى 5 مستحقات", value=top_str, inline=False)
-    await channel.send(embed=embed)
+    currency = SETTINGS.get('currency', '$') or '$'
+    avatar_url = bot.user.display_avatar.url if bot.user else None
+
+    title = "🔔 تذكير بموعد الدفع" if hours_before == 24 else "📅 اليوم هو موعد الدفع الشهري"
+    intro = ("⏰ تبقى 24 ساعة على موعد الدفع الشهري." if hours_before == 24
+             else "📅 اليوم هو موعد الدفع الشهري.")
+
+    body_lines = [
+        intro,
+        f"**إجمالي المبلغ المستحق:** {currency}{total_all:,.2f}",
+    ]
+    if totals:
+        top5 = sorted(totals.items(), key=lambda x: x[1], reverse=True)[:5]
+        top_str = "\n".join(f"• <@{uid}> — {currency}{amt:,.2f}" for uid, amt in top5)
+        body_lines.append(f"**أعلى 5 مستحقات**\n{top_str}")
+
+    await channel.send(view=cards.simple_card(cards.ACCENT_GOLD, title, body_lines, avatar_url=avatar_url))
+
 
 # ----------------------------------------------------------------------
 # Autocomplete helpers
@@ -153,6 +189,7 @@ async def work_autocomplete(interaction: discord.Interaction, current: str) -> L
         if current.lower() in w["name"].lower():
             choices.append(app_commands.Choice(name=w["name"][:100], value=w["name"]))
     return choices[:25]
+
 
 async def registration_specialty_autocomplete(interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
     """
@@ -184,6 +221,7 @@ async def registration_specialty_autocomplete(interaction: discord.Interaction, 
             choices.append(app_commands.Choice(name=display_name[:100], value=name))
     return choices[:25]
 
+
 async def specialty_autocomplete(interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
     """
     تُستخدم في أوامر الإدارة.
@@ -207,6 +245,7 @@ async def specialty_autocomplete(interaction: discord.Interaction, current: str)
                 if current.lower() in display.lower():
                     choices.append(app_commands.Choice(name=display[:100], value=spec))
     return choices[:25]
+
 
 async def custom_setup():
     bot.add_listener(on_command_error, "on_command_error")
