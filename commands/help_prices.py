@@ -1,143 +1,176 @@
+from datetime import datetime
 import discord
 from discord import app_commands
 from discord.ext import commands
 from state import bot
-from helpers.core import SETTINGS
-
-# ----------------------------------------------------------------------
-# واجهة القائمة المنسدلة (Select Menu) للأوامر
-# ----------------------------------------------------------------------
-class HelpView(discord.ui.View):
-    def __init__(self, user: discord.User):
-        super().__init__(timeout=120)  # تنتهي صلاحية القائمة بعد دقيقتين من عدم الاستخدام
-        self.user = user
-
-    # التحقق من أن الشخص الذي يختار من القائمة هو نفسه من كتب الأمر
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.user.id:
-            await interaction.response.send_message("❌ هذه القائمة ليست لك! اكتب الأمر الخاص بك لتتمكن من التحكم.", ephemeral=True)
-            return False
-        return True
-
-    # إنشاء القائمة المنسدلة وخياراتها
-    @discord.ui.select(
-        placeholder="اختر قسم الأوامر من هنا... 🔽",
-        min_values=1,
-        max_values=1,
-        options=[
-            discord.SelectOption(label="الصفحة الرئيسية", description="العودة للواجهة الأساسية", emoji="🏠", value="home"),
-            discord.SelectOption(label="أوامر الأعضاء", description="تسجيل الفصول وكشوفات الحساب", emoji="👥", value="members"),
-            discord.SelectOption(label="أوامر الإدارة", description="أدوات المشرفين والتحكم المالي", emoji="⚙️", value="admin")
-        ]
-    )
-    async def help_select(self, interaction: discord.Interaction, select: discord.ui.Select):
-        value = select.values[0]
-        avatar_url = interaction.client.user.display_avatar.url  # جلب رابط صورة البوت
-
-        if value == "home":
-            embed = discord.Embed(
-                title="كوكيز تراكر 🍪",
-                description=(
-                    f" أهلاً بك يا جميل {interaction.user.mention} في بوت إدارة فلوس فريق كوكيز الرائع 🍪🥛.\n\n"
-                    "اضغط على القائمة المنسدلة في الأسفل للتنقل بين قوائم الأوامر المتاحة ومعرفة طريقة الاستخدام."
-                ),
-                color=discord.Color.purple()
-            )
-            embed.add_field(name="👥 أوامر الأعضاء", value="استعراض أوامر تسجيل الفصول وكشوفات الحساب الشخصية.", inline=True)
-            embed.add_field(name="⚙️ أوامر الإدارة", value="استعراض أدوات المشرفين، إدارة الاعمال والتحكم المالي.", inline=True)
-            embed.set_footer(text="🤓 بُوت زيوس • صُنع بكل حب")
-
-        elif value == "members":
-            embed = discord.Embed(
-                title="👥 أوامر اعضاء الفريق",
-                description="هذه الأوامر متاحة لجميع أعضاء الفريق لتسجيل وإدارة أعمالهم اليومية:",
-                color=discord.Color.blue()
-            )
-            embed.add_field(name="▸ `/تسجيل` أو `!تحليل`", value="تسجيل فصول جديدة (يدعم النطاقات مثل `1-5`).", inline=False)
-            embed.add_field(name="▸ `/أعمالي` أو `!أعمالي`", value="عرض كشف حسابك بالتفصيل (الفصول المنجزة والمبالغ المستحقة).", inline=False)
-            embed.add_field(name="▸ `/شغل` أو `!شغل`", value="عرض كشف الحساب الخاص بعضو آخر عبر الإشارة إليه (منشن).", inline=False)
-            embed.add_field(name="▸ `/اسعار` أو `!اسعار`", value="عرض قائمة أسعار التخصصات الحالية المعتمدة في السيرفر.", inline=False)
-            embed.add_field(name="▸ `/الأعمال`", value="عرض قائمة الاعمال المعتمدة والمساهمين فيها بنظام صفحات.", inline=False)
-            embed.add_field(name="▸ `/اعضاء_تخصص`", value="للمشرفين: عرض أعضاء تخصص معين ومبالغهم قبل الصرف.", inline=False)
-            embed.add_field(name="▸ `/تعديل`", value="تعديل تفاصيل آخر سجل قمت بإضافته مباشرة في حال حدوث خطأ.", inline=False)
-            embed.set_footer(text="يمكنك اختيار 'الصفحة الرئيسية' من القائمة للعودة")
-
-        elif value == "admin":
-            embed = discord.Embed(
-                title="⚙️ أدوات التحكم والإدارة",
-                description="هذه الأوامر حصرية للمشرفين والمسؤولين لإدارة البيانات والمالية:",
-                color=discord.Color.red()
-            )
-            embed.add_field(name="▸ `/تصدير`", value="استخراج وتصدير قاعدة البيانات بالكامل إلى ملف Excel منظم.", inline=False)
-            embed.add_field(name="▸ `/إعدادات`", value="ضبط العملة، قنوات الإشعارات، والحد المالي للتنبيهات الحساسة.", inline=False)
-            embed.add_field(name="▸ `/عمل`", value="إضافة عمل جديد أو حذفه (مع خيار تطهير سجلاته بالكامل).", inline=False)
-            embed.add_field(name="▸ `/تعديل_سعر`", value="تعديل سعر تخصص معين (مثل الترجمة أو التبييض) فوراً.", inline=False)
-            embed.add_field(name="▸ `/تحديث_أسعار`", value="تطبيق الأسعار الجديدة على السجلات القديمة بأثر رجعي.", inline=False)
-            embed.add_field(name="▸ `/تحديد_قنوات`", value="تحديد الغرف المسموح للبوت باستقبال أوامر التسجيل داخلها.", inline=False)
-            embed.add_field(name="▸ `/حذف`", value="فتح قائمة الاختيارات لحذف سجلات عضو، أو عمل، أو فصل معين.", inline=False)
-            embed.add_field(name="▸ `/حذف_كل_الأعمال`", value="مسح قائمة الاعمال النشطة بالكامل مع حماية السجلات الماليّة.", inline=False)
-            embed.add_field(name="▸ `/الأعضاء`", value="عرض كل الأعضاء المسجلين مع الأموال والسجلات والبحث والصفحات.", inline=False)
-            embed.add_field(name="▸ `/تقرير_دفع`", value="تقرير دفع شهري مفصل لكل عضو مع صفحات وتصدير Excel.", inline=False)
-            embed.add_field(name="▸ `/عزل_عمل` و `/استرجاع_عمل`", value="تأجيل احتساب عمل كامل أو إعادته دون حذف سجلاته.", inline=False)
-            # الأوامر الجديدة لإدارة الأسعار المخصصة للأعمال
-            embed.add_field(name="▸ `/تخصيص_سعر_عمل`", value="تخصيص سعر استثنائي لتخصص معين داخل عمل محدد (يسري فقط على هذا العمل).", inline=False)
-            embed.add_field(name="▸ `/الغاء_تخصيص_عمل`", value="إزالة جميع التخصيصات السعرية من عمل ليعود إلى الأسعار العامة.", inline=False)
-            embed.add_field(name="▸ `/عرض_تخصيصات_عمل`", value="عرض قائمة التخصصات ذات الأسعار المخصصة لعمل معين.", inline=False)
-            embed.set_footer(text="يمكنك اختيار 'الصفحة الرئيسية' من القائمة للعودة")
-
-        # تثبيت الصورة الكبيرة يميناً في جميع الصفحات المتنقلة
-        embed.set_thumbnail(url=avatar_url)
-        await interaction.response.edit_message(embed=embed, view=self)
+from helpers.core import SETTINGS, PRICES
+from helpers.core import save_settings, rebuild_prices, map_type, channel_allowed
+from tasks.lifecycle import specialty_autocomplete
+from ui import cards
 
 
-# ----------------------------------------------------------------------
-# الأمر البرمجي الأساسي للمساعدة
-# ----------------------------------------------------------------------
-@bot.tree.command(name="اوامر", description="عرض دليل الأوامر للبوت")
+def bot_avatar(interaction: discord.Interaction):
+    return interaction.client.user.display_avatar.url if interaction.client.user else None
+
+
+# ═══════════════════════════════════════════════════════════════
+# 📖 بطاقة المساعدة — نفس بنية بطاقة /مساعدة في بوت السحب:
+#   حاوية ذهبية + رأس بصورة البوت + سطر تعريف، ثم قسم
+#   «### 🔹 /الأمر» لكل أمر مفصول بفواصل، ثم التذييل.
+# ═══════════════════════════════════════════════════════════════
+def build_help_card(avatar_url: str | None, user_mention: str) -> cards.Card:
+    children: list = [
+        cards.header(
+            [
+                "## Cookies Tracker",
+                f"أهلاً {user_mention} — بوت إدارة فلوس فريق كوكيز: سجّل فصولك، وتابع مستحقاتك، "
+                "ويحسب البوت كل شيء بدقة حتى يوم الدفع.",
+            ],
+            avatar_url,
+        ),
+        cards.sep(2),
+    ]
+
+    def command_block(title: str, body: str):
+        children.append(cards.text(f"### {title}\n{body}"))
+        children.append(cards.sep())
+
+    # ── أوامر الأعضاء ──
+    command_block("/تسجيل", "تسجيل فصول منجزة واستلام إيصال جاهز بالحساب.\n"
+                  "**1.** اختر العمل من القائمة.\n**2.** اكتب الفصول مثل `1-5`.\n"
+                  "**3.** حدد التخصصات مثل `ترجمة كوري-تحرير` ويصلك الإيصال فورًا بصورتك في الرأس.")
+    command_block("!تسجيل", "نفس /تسجيل لكن تفاعلي بالبريفكس: تختار فقط من قوائم منسدلة\n"
+                  "(العمل ← الفصول ← التخصصات ← تأكيد) والبوت يقودك خطوة بخطوة ويحسب كل شيء.")
+    command_block("/أعمالي", "لوحتك الشخصية: أعمالك مجمعة مع المكافآت والخصومات والصافي النهائي، "
+                  "واختيار أي عمل يفتح ملخصه وتوزيع تخصصاته وفصوله مرتبة رقميًا.")
+    command_block("/شغل", "عرض شغل أي عضو مجمّع — اذكر العضو أو اتركه فارغًا لك. "
+                  "البطاقة تحمل **صورة العضو المعنيّ** وتفاصيل دقيقة لكل عمل.")
+    command_block("/ملخص_شهري", "ملخص شغلك للشهر الحالي: الفصول، الصافي، وتفصيل الأعمال والتخصصات.")
+    command_block("/تقريري", "تقرير أسبوعي خاص بك: مهام آخر 7 أيام ومجموعها وتفصيلها.")
+    command_block("/تعديل", "تعديل آخر سجل قمت بإضافته مباشرة في حال حدوث خطأ.")
+    command_block("/اسعار", "عرض قائمة أسعار التخصصات المعتمدة، مع التخصيصات الخاصة لكل عمل.")
+    command_block("/الأعمال", "عرض قائمة الأعمال المعتمدة مرتبة حسب النشاط — اختر عملاً لفتح مساهميه "
+                  "ثم فصول أي عضو مرتبة رقميًا (ملخص ← تخصصات ← فصول).")
+    command_block("/احصائيات", "لوحة إحصائيات تفاعلية للشهر الحالي: نظرة عامة، التخصصات، الزمني، والأفضل.")
+    command_block("/توب", "ترتيب الأعضاء حسب المبلغ أو عدد الفصول أو داخل تخصص محدد — "
+                  "كل عضو في سطرين مستقلين، والمركز الأول يحمل التاج.")
+    command_block("/مساعدة", "عرض هذا الدليل.")
+
+    # ── أوامر الإدارة ──
+    children.append(cards.text(
+        "### أوامر الإدارة\n"
+        "• `/تسجيل_للغير` — تسجيل شغل لعضو معين (الإيصال بصورة العضو).\n"
+        "• `/الأعضاء` — كل الأعضاء المحفوظين عبر الشهور، ومن لا عمل له يظهر بوضوح.\n"
+        "• `/الشهور` — مركز الأشهر: إنشاء شهر جديد والانتقال بين الشهور وتسميتها وحذفها\n"
+        "  — الأعمال والأعضاء تبقى، وكل شهر بسجلاته المستقلة.\n"
+        "• `/تخصصات` — مركز التخصصات الموحد: الأسعار والحالة والاستخدام والتخصيصات.\n"
+        "• `/اعضاء_تخصص` — أعضاء تخصص محدد مرتبين حسب الفصول.\n"
+        "• `/لوحة_التحكم` — مركز إدارة: كل زر **ينفّذ** قسمه مباشرة، وكل قسم له زر رجوع.\n"
+        "• `/تعديل_سعر` و `/تحديث_أسعار` — تعديل سعر تخصص وتطبيقه بأثر رجعي.\n"
+        "• `/اضافة_تخصص` • `/حذف_تخصص` • `/تفعيل_تخصص` • `/تعطيل_تخصص` — إدارة التخصصات.\n"
+        "• `/اضافة_عمل` • `/حذف_عمل` • `/تعديل_عمل` — إدارة الأعمال.\n"
+        "• `/عزل_عمل` و `/استرجاع_عمل` — تأجيل احتساب عمل كامل أو إعادته دون حذف سجلاته.\n"
+        "• `/تخصيص_سعر_عمل` • `/الغاء_تخصيص_عمل` • `/عرض_تخصيصات_عمل` — أسعار خاصة بعمل محدد.\n"
+        "• `/نقل_تخصص_للخاص` و `/نقل_تخصص_للعام` — نقل تخصص بين العامة وتخصيصات العمل.\n"
+        "• `/مكافأة` • `/خصم` • `/حذف_مكافأة_خصم` — نظام المكافآت والخصومات.\n"
+        "• `/حذف` • `/حذف_الكل` • `/حذف_كل_الأعمال` — حذف السجلات والأعمال.\n"
+        "• `/تقرير_دفع` — تقرير الدفع للشهر النشط مع تصدير Excel.\n"
+        "• `/سجل` — سجل العمليات الإدارية.\n"
+        "• `/اعدادات` • `/تحديد_قنوات` • `/تحديد_موعد_الدفع` — إعدادات السيرفر.\n"
+        "• `/رفع_البيانات` و `/تصدير` — النسخ والاستعادة."
+    ))
+    children.append(cards.sep())
+    children.append(cards.text(
+        "سلسلة التسجيل: فحص العمل ← فلترة الفصول المدفوعة ← تسجيل الفصول ← حساب المستحق ← إيصال جاهز."
+    ))
+    children.append(cards.sep())
+    children.append(cards.text("-# الأمر /تسجيل متاح في القنوات المحددة من /تحديد_قنوات، وأوامر الإدارة لمن يملك صلاحية إدارة الرسائل فأعلى."))
+    children.append(cards.sep())
+    children.append(cards.text(f"-# {cards.BOT_SIGNATURE}"))
+
+    return cards.Card(cards.ACCENT_GOLD, *children)
+
+
+async def _send_help(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        view=build_help_card(bot_avatar(interaction), interaction.user.mention))
+
+
+@bot.tree.command(name="مساعدة", description="شرح الأوامر وطريقة الاستخدام")
 @app_commands.checks.cooldown(1, 5, key=lambda i: (i.user.id, i.command.qualified_name))
 async def help_slash(interaction: discord.Interaction):
-    # إنشاء بطاقة ترحيبية أساسية
-    embed = discord.Embed(
-        title="كوكيز تراكر 🍪",
-        description=(
-            f" أهلاً بك يا جميل {interaction.user.mention} في بوت إدارة فلوس فريق كوكيز الرائع 👀🔥.\n\n"
-            "اضغط على القائمة المنسدلة في الأسفل للتنقل بين قوائم الأوامر المتاحة ومعرفة طريقة الاستخدام."
-        ),
-        color=discord.Color.purple()
-    )
-    embed.add_field(name="👥 أوامر الأعضاء", value="استعراض أوامر تسجيل الفصول وكشوفات الحساب الشخصية.", inline=True)
-    embed.add_field(name="⚙️ أوامر الإدارة", value="استعراض أدوات المشرفين، إدارة الاعمال والتحكم المالي.", inline=True)
-    embed.set_footer(text="🤓 بُوت زيوس • صُنع بكل حب")
-
-    # إضافة صورة البوت في جهة اليمين (Thumbnail) للرسالة الأولى
-    embed.set_thumbnail(url=interaction.client.user.display_avatar.url)
-
-    # استدعاء القائمة وإرسالها مع الرسالة
-    view = HelpView(interaction.user)
-    await interaction.response.send_message(embed=embed, view=view)
+    await _send_help(interaction)
 
 
-# ----------------------------------------------------------------------
-# كود تعديل الأسعار القديم (متروك كما هو دون أي تغيير لحفظ ملفك)
-# ----------------------------------------------------------------------
-from datetime import datetime
-from helpers.core import save_settings, rebuild_prices, map_type
-from tasks.lifecycle import is_admin, specialty_autocomplete
+@bot.tree.command(name="اوامر", description="عرض دليل الأوامر للبوت")
+@app_commands.checks.cooldown(1, 5, key=lambda i: (i.user.id, i.command.qualified_name))
+async def help_slash_alias(interaction: discord.Interaction):
+    await _send_help(interaction)
 
+
+# ═══════════════════════════════════════════════════════════════
+# 🏷️ /اسعار — بطاقة الأسعار بنمط قائمة المواقع في بوت السحب
+# ═══════════════════════════════════════════════════════════════
+@bot.tree.command(name="اسعار", description="عرض أسعار التخصصات المعتمدة")
+@app_commands.checks.cooldown(1, 5, key=lambda i: (i.user.id, i.command.qualified_name))
+async def prices_slash(interaction: discord.Interaction):
+    avatar_url = bot_avatar(interaction)
+    currency = SETTINGS.get('currency', '$') or '$'
+    children: list = [
+        cards.header(["## أسعار التخصصات", f"**{len(PRICES)}** تخصصات متاحة بسعر الفصل الواحد."], avatar_url),
+        cards.sep(2),
+    ]
+    if PRICES:
+        max_price = max(PRICES.values()) or 1
+        bullets = "\n".join(
+            f"• **{spec.replace('_', ' ').title()}** — {cards.progress_bar(price, max_price)} {currency}{price:.2f}"
+            for spec, price in sorted(PRICES.items(), key=lambda kv: -kv[1]))
+        children.append(cards.text(bullets))
+    else:
+        children.append(cards.text("لا توجد تخصصات مفعّلة بعد — يضيفها المشرفون من /اضافة_تخصص."))
+
+    # التخصيصات الخاصة بالأعمال
+    from helpers.core import load_works
+    works = await load_works()
+    custom_groups = [(w["name"], w.get("custom_prices", {})) for w in works if w.get("custom_prices")]
+    for work_name, custom in custom_groups[:5]:
+        children.append(cards.sep(2))
+        custom_bullets = "\n".join(f"• **{spec.replace('_', ' ').title()}** — {currency}{float(price):.2f}"
+                                   for spec, price in custom.items())
+        children.append(cards.text(f"**تخصيصات عمل «{work_name}»**\n{custom_bullets}"))
+    if len(custom_groups) > 5:
+        children.append(cards.sep())
+        children.append(cards.text(f"-# و{len(custom_groups) - 5} أعمال أخرى لها تخصيصات سعرية…"))
+
+    children += [cards.sep(), cards.text(f"-# {cards.BOT_SIGNATURE}")]
+    await interaction.response.send_message(view=cards.Card(cards.ACCENT_GOLD, *children))
+
+
+# ═══════════════════════════════════════════════════════════════
+# /تعديل_سعر — بطاقة نجاح بنمط ZEUS
+# ═══════════════════════════════════════════════════════════════
 @bot.tree.command(name="تعديل_سعر", description="تعديل سعر تخصص معين (للمشرفين فقط)")
 @app_commands.autocomplete(التخصص=specialty_autocomplete)
 @app_commands.checks.cooldown(1, 5, key=lambda i: (i.user.id, i.command.qualified_name))
 async def edit_price_slash(interaction: discord.Interaction, التخصص: str, السعر: float):
+    avatar_url = bot_avatar(interaction)
     if not is_admin(interaction):
-        await interaction.response.send_message("❌ ما عندك صلاحية تستخدم هذا الأمر.", ephemeral=True)
+        await interaction.response.send_message(view=cards.permission_card(avatar_url), ephemeral=True)
         return
     norm_type = map_type(التخصص)
     if norm_type not in SETTINGS.get("specialties", {}):
-        await interaction.response.send_message(f"❌ التخصص `{التخصص}` غير موجود.", ephemeral=True)
+        await interaction.response.send_message(view=cards.error_card(
+            "التخصص غير موجود",
+            [f"التخصص `{التخصص}` غير موجود في القائمة."],
+            avatar_url=avatar_url), ephemeral=True)
         return
     SETTINGS["specialties"][norm_type]["price"] = السعر
     SETTINGS["specialties"][norm_type]["last_modified"] = datetime.utcnow().isoformat()
     await save_settings(SETTINGS)
     rebuild_prices()
-    await interaction.response.send_message(f"✅ تم تحديث سعر `{norm_type}` إلى {SETTINGS.get('currency', '$')}{السعر:.2f}", ephemeral=True)
-    await interaction.channel.send("⚠️ تذكير: لا تنس استخدام الأمر `/تحديث_أسعار` لتطبيق السعر الجديد على السجلات القديمة إذا كنت ترغب في ذلك.")
+    currency = SETTINGS.get('currency', '$') or '$'
+    await interaction.response.send_message(view=cards.success_card(
+        "تم تحديث السعر",
+        [f"التخصص **{norm_type.replace('_', ' ').title()}** — السعر الجديد: **{currency}{السعر:.2f}** لكل فصل.",
+         "-# تذكير: لا تنس استخدام الأمر `/تحديث_أسعار` لتطبيق السعر الجديد على السجلات القديمة إذا كنت ترغب في ذلك."],
+        avatar_url=avatar_url), ephemeral=True)

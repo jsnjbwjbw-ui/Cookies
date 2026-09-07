@@ -1,4 +1,5 @@
 pandas
-discord.py
+discord.py>=2.6.0
 python-dotenv
 motor
+openpyxl

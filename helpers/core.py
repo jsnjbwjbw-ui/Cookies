@@ -5,7 +5,11 @@ import re
 import discord
 from discord import app_commands
 from config import DEFAULT_SPECIALTIES, DEFAULT_ALLOWED_CHANNELS 
-from database import collection, settings_collection, audit_collection, stats_collection
+from database import (
+    collection, settings_collection, audit_collection, stats_collection,
+    members_collection, months_collection,
+    DatabaseUnavailableError, ensure_db_ready,
+)
 
 SETTINGS = {}
 PRICES = {}
@@ -13,30 +17,318 @@ PRICES = {}
 FIXED_ALLOWED_CHANNEL = "ム・💎〢شات・اونر"
 
 def is_admin(interaction: discord.Interaction) -> bool:
+    """توحيد صلاحية الإدارة لكل الأوامر:
+    مدير السيرفر (administrator) أو من يملك إدارة الرسائل (manage_messages)."""
     if not interaction.guild:
         return False
-    return interaction.user.guild_permissions.administrator
+    perms = getattr(interaction.user, "guild_permissions", None)
+    if perms is None:
+        return False
+    return perms.administrator or perms.manage_messages
 
-def format_member_display(guild: discord.Guild, user_id: int, username_hint: str = None) -> str:
-    member = guild.get_member(user_id)
-    if member:
-        return f"@{member.name}"
+
+def channel_allowed(interaction: discord.Interaction) -> bool:
+    """فحص القناة المسموحة — يقبل **المعرف الرقمي** أو الاسم معًا:
+    أمر /تحديد_قنوات يحفظ معرف القناة (int)، لذا المقارنة بالاسم وحده
+    كانت ترفض القناة المحددة نفسها. يعمل هذا الفحص مع الثريدات أيضًا."""
+    ch = getattr(interaction, "channel", None)
+    if ch is None:
+        return False
+    allowed = SETTINGS.get("allowed_channels", [])
+    ch_id = getattr(ch, "id", None)
+    if ch_id is not None and ch_id in allowed:
+        return True
+    name = getattr(ch, "name", None)
+    return bool(name) and name in allowed
+
+
+def sort_entries_by_chapter(entries: list) -> list:
+    """ترتيب السجلات رقميًا حسب رقم الفصل (وإلا نصيًا) — للعرض المنظم."""
+    def key(e):
+        ch = str(e.get("chapter", ""))
+        if ch.isdigit():
+            return (0, int(ch), "")
+        return (1, 0, ch)
+    return sorted(entries, key=key)
+
+
+def entry_datetime(entry: dict):
+    """تحويل طابع السجل الزمني إلى datetime بأمان (None عند الفشل)."""
+    ts = entry.get("timestamp")
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(str(ts))
+    except Exception:
+        return None
+
+
+# ----------------------------------------------------------------------
+# نظام الأشهر — كل سجل يحمل month_key (YYYY-MM) ويُعرض دائمًا الشهر النشط.
+# الأعمال والأعضاء ثابتة عبر الشهور؛ التبديل بين الشهور لا يحذف شيئًا أبدًا.
+# ----------------------------------------------------------------------
+def _is_month_key(v) -> bool:
+    return isinstance(v, str) and len(v) == 7 and v[:4].isdigit() and v[4] == "-" and v[5:].isdigit()
+
+
+def month_key_from_datetime(dt: datetime) -> str:
+    return dt.strftime("%Y-%m")
+
+
+def get_active_month_key() -> str:
+    """مفتاح الشهر النشط من الإعدادات، وإلا الشهر الحالي UTC."""
+    v = SETTINGS.get("active_month")
+    if _is_month_key(v):
+        return v
+    return month_key_from_datetime(datetime.now(timezone.utc))
+
+
+def month_key_of(entry: dict) -> str:
+    """مفتاح شهر السجل — من الحقل المحفوظ أو من الطابع الزمني."""
+    mk = entry.get("month_key")
+    if _is_month_key(mk):
+        return mk
+    dt = entry_datetime(entry)
+    return month_key_from_datetime(dt) if dt else "unknown"
+
+
+def entry_in_month(entry: dict, month_key: str) -> bool:
+    return month_key_of(entry) == month_key
+
+
+async def get_month_doc(month_key: str) -> dict | None:
+    try:
+        return await months_collection.find_one({"_id": month_key})
+    except Exception as e:
+        print(f"[ERROR] get_month_doc({month_key}) - {e}")
+        return None
+
+
+async def ensure_month_doc(month_key: str, created_by=None) -> None:
+    """ضمان وجود وثيقة شهر (اسم افتراضي عند الإنشاء فقط)."""
+    if not _is_month_key(month_key):
+        return
+    update: dict = {"$setOnInsert": {
+        "name": f"شهر {month_key}",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }}
+    if created_by:
+        update["$setOnInsert"]["created_by"] = str(created_by)
+    try:
+        await months_collection.update_one({"_id": month_key}, update, upsert=True)
+    except Exception as e:
+        print(f"[ERROR] ensure_month_doc({month_key}) - {e}")
+
+
+async def get_month_name(month_key: str) -> str:
+    doc = await get_month_doc(month_key)
+    if doc and doc.get("name"):
+        return str(doc["name"])
+    return f"شهر {month_key}"
+
+
+async def all_known_month_keys() -> list[str]:
+    """كل مفاتيح الشهور المعروفة: وثائق months + المفاتيح الموجودة داخل السجلات."""
+    keys: set[str] = set()
+    try:
+        async for doc in months_collection.find({}, {"_id": 1}):
+            if _is_month_key(doc["_id"]):
+                keys.add(doc["_id"])
+    except Exception as e:
+        print(f"[ERROR] all_known_month_keys(months) - {e}")
+    try:
+        records = await load_records()
+        for entries in records.values():
+            for e in entries:
+                mk = month_key_of(e)
+                if _is_month_key(mk):
+                    keys.add(mk)
+    except Exception as e:
+        print(f"[ERROR] all_known_month_keys(records) - {e}")
+    return sorted(keys)
+
+
+# ----------------------------------------------------------------------
+# الأعضاء المحفوظون — مجموعة مستقلة تبقى عبر كل الشهور؛ حتى لو لم يسجل
+# العضو أي عمل في شهر جديد يظهر في /الأعضاء بحالة واضحة لا مختفية.
+# ----------------------------------------------------------------------
+async def upsert_member(user_id, username: str | None = None) -> None:
+    update: dict = {"$setOnInsert": {
+        "first_seen": datetime.now(timezone.utc).isoformat(),
+    }}
+    if username:
+        update["$set"] = {"username": username, "last_seen": datetime.now(timezone.utc).isoformat()}
+    else:
+        update["$set"] = {"last_seen": datetime.now(timezone.utc).isoformat()}
+    try:
+        await members_collection.update_one({"_id": str(user_id)}, update, upsert=True)
+    except Exception as e:
+        print(f"[ERROR] upsert_member({user_id}) - {e}")
+
+
+async def load_members() -> dict:
+    """كل الأعضاء المعروفين للبوت: {user_id: doc}."""
+    try:
+        docs = await members_collection.find().to_list(length=5000)
+        return {d["_id"]: d for d in docs}
+    except Exception as e:
+        print(f"[ERROR] load_members() - {e}")
+        return {}
+
+
+# ----------------------------------------------------------------------
+# جلب العضو (كاش + fetch) — ليعرض اسم العضو في السيرفر (النك نيم)
+# حتى لو لم يكن في الكاش، بدل اليوزر نيم المحفوظ في السجلات.
+# ----------------------------------------------------------------------
+_member_fetch_cache: dict = {}
+
+
+async def fetch_member_cached(guild: discord.Guild | None, user_id) -> discord.Member | None:
+    if guild is None:
+        return None
+    try:
+        uid = int(user_id)
+    except (ValueError, TypeError):
+        return None
+    key = (guild.id, uid)
+    if key in _member_fetch_cache:
+        return _member_fetch_cache[key]
+    member = guild.get_member(uid)
+    if member is None:
+        try:
+            member = await guild.fetch_member(uid)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            member = None
+    if len(_member_fetch_cache) > 800:
+        _member_fetch_cache.clear()
+    _member_fetch_cache[key] = member
+    return member
+
+
+async def resolve_display_name(guild: discord.Guild | None, user_id, username_hint: str = None) -> str:
+    """النك نيم في السيرفر أولاً، ثم الاسم المحفوظ، ثم المعرف."""
+    member = await fetch_member_cached(guild, user_id)
+    if member is not None:
+        return member.display_name
     if username_hint:
-        return f"@{username_hint}"
+        return username_hint
     return str(user_id)
 
+
+def build_monthly_summary_card(user, month_entries: list, currency: str = "$", avatar_url=None, back_factory=None, month_label: str | None = None):
+    """بطاقة الملخص الشهري الموحدة — تُستخدم في /ملخص_شهري وفي زر
+    «ملخص شهري» داخل لوحة التحكم حتى لا يختلف التصميم أبدًا.
+    عند تمرير back_factory يُضاف زر «عودة إلى لوحة التحكم» أسفل البطاقة،
+    وmonth_label يظهر في التذييل (اسم الشهر النشط)."""
+    from ui import cards  # استيراد مؤجل لتجنب أي دورة استيراد
+
+    currency = currency or "$"
+    total = sum(e.get("total", 0) for e in month_entries)
+    bonuses = sum(e.get("total", 0) for e in month_entries if e.get("work_type") == "مكافأة")
+    deductions = sum(abs(e.get("total", 0)) for e in month_entries if e.get("work_type") == "خصم")
+    work_entries = [e for e in month_entries if e.get("work_type") not in ("مكافأة", "خصم")]
+
+    works_count = defaultdict(int)
+    for e in work_entries:
+        works_count[e.get("work_name", "غير محدد")] += 1
+    types_count = defaultdict(int)
+    for e in work_entries:
+        types_count[e.get("work_type", "غير محدد")] += 1
+    net = total + bonuses - deductions
+
+    # كل رقم في سطر مستقل — لا حشو في سطر واحد أبدًا
+    stats_lines = [f"**الفصول:** {len(work_entries)}"]
+    if bonuses:
+        stats_lines.append(f"**المكافآت:** {currency}{bonuses:,.2f}")
+    if deductions:
+        stats_lines.append(f"**الخصومات:** {currency}{deductions:,.2f}")
+    stats_lines.append(f"**💰 الصافي المستحق:** {currency}{net:,.2f}")
+
+    works_lines = [f"• **{w}** — {c} فصول" for w, c in sorted(works_count.items(), key=lambda kv: -kv[1])] or ["• لا يوجد"]
+    types_lines = [f"• **{t.replace('_', ' ').title()}** — {c} فصول"
+                   for t, c in sorted(types_count.items(), key=lambda kv: -kv[1])] or ["• لا يوجد"]
+
+    thumb = avatar_url
+    if thumb is None and hasattr(user, "display_avatar"):
+        thumb = user.display_avatar.url
+
+    head = (cards.member_header(["## الملخص الشهري", f"<@{user.id}>"], user) if thumb
+            else cards.header(["## الملخص الشهري", f"<@{user.id}>"], None))
+
+    children = [
+        head,
+        cards.sep(2),
+        cards.text("\n".join(stats_lines)),
+        cards.sep(),
+        cards.text("### تفصيل الأعمال\n" + "\n".join(works_lines)),
+        cards.sep(),
+        cards.text("### تفصيل التخصصات\n" + "\n".join(types_lines)),
+    ]
+    if back_factory is not None:
+        async def _back(interaction: discord.Interaction):
+            parent = back_factory()
+            if hasattr(parent, "__await__"):
+                parent = await parent
+            await interaction.response.edit_message(view=parent)
+        children += [
+            cards.sep(),
+            cards.row(cards.secondary_btn("عودة إلى لوحة التحكم", _back, emoji="↩")),
+        ]
+    footnote = month_label if month_label else "من بداية الشهر حتى الآن"
+    children += [
+        cards.sep(),
+        cards.text(f"-# {footnote} • {cards.BOT_SIGNATURE}"),
+    ]
+    return cards.Card(cards.ACCENT_GOLD, *children)
+
+def member_display_name(guild: discord.Guild | None, user_id, username_hint: str = None) -> str:
+    """اسم العضو في السيرفر (النك نيم) — يُستخدم داخل القوائم المنسدلة فقط."""
+    member = guild.get_member(int(user_id)) if guild else None
+    if member:
+        return member.display_name
+    if username_hint:
+        return username_hint
+    return str(user_id)
+
+
+def member_mention(user_id) -> str:
+    """المنشن الحقيقي الوحيد المسموح في كل رسائل البوت: <@ID>."""
+    return f"<@{user_id}>"
+
 async def load_works() -> list:
-    doc = await collection.find_one({"_id": "works"})
+    """قائمة الأعمال — عند فشل الاتصال يُرفع خطأ بدل إرجاع قائمة فارغة
+    (لأن أول كتابة بعدها تمسح قائمة الأعمال الحقيقية)."""
+    try:
+        doc = await collection.find_one({"_id": "works"})
+    except Exception as e:
+        raise DatabaseUnavailableError(f"تعذر قراءة الأعمال من قاعدة البيانات: {e}") from e
     if doc and "data" in doc:
         return doc["data"]
     return []
 
-async def save_works(works: list):
-    await collection.update_one(
-        {"_id": "works"},
-        {"$set": {"data": works}},
-        upsert=True
-    )
+
+async def save_works(works: list, *, allow_wipe: bool = False) -> bool:
+    """حفظ الأعمال — يرفض استبدال قائمة غير فارغة بقائمة فارغة
+    إلا في العمليات الصريحة (allow_wipe=True بعد تأكيد إداري)."""
+    if not works and not allow_wipe:
+        try:
+            existing = await collection.find_one({"_id": "works"}, {"data": 1})
+            if existing and existing.get("data"):
+                print("[SAFETY] save_works() رفض استبدال قائمة أعمال غير فارغة بقائمة فارغة.")
+                return False
+        except Exception:
+            pass
+    try:
+        await collection.update_one(
+            {"_id": "works"},
+            {"$set": {"data": works}},
+            upsert=True
+        )
+        return True
+    except Exception as e:
+        print(f"[ERROR] save_works() - {e}")
+        await ensure_db_ready(force=True)
+        return False
 
 async def get_work(work_name: str) -> dict | None:
     works = await load_works()
@@ -57,18 +349,34 @@ def filter_visible_entries(entries: list, isolated_work_names: set[str]) -> list
         if not entry.get("work_name") or entry.get("work_name") not in isolated_work_names
     ]
 
-async def load_visible_records() -> dict:
+async def load_visible_records(month_key: str | None = "__active__") -> dict:
+    """سجلات مرئية (بلا أعمال معزولة) — افتراضيًا **سجلات الشهر النشط فقط**.
+    month_key=None يعيد كل الشهور، ومفتاح محدد يعيد ذلك الشهر."""
     records = await load_records()
     works = await load_works()
     isolated = get_isolated_work_names(works)
-    if not isolated:
-        return records
+    if month_key == "__active__":
+        month_key = get_active_month_key()
     visible = {}
     for user_id, entries in records.items():
-        filtered = filter_visible_entries(entries, isolated)
+        filtered = [
+            e for e in entries
+            if (not e.get("work_name") or e.get("work_name") not in isolated)
+            and (month_key is None or entry_in_month(e, month_key))
+        ]
         if filtered:
             visible[user_id] = filtered
     return visible
+
+
+async def get_active_stats_doc() -> dict:
+    """وثيقة إحصائيات الشهر النشط (stats:{month_key})."""
+    key = get_active_month_key()
+    try:
+        doc = await stats_collection.find_one({"_id": f"stats:{key}"})
+    except Exception as e:
+        raise DatabaseUnavailableError(f"تعذر قراءة الإحصائيات: {e}") from e
+    return doc or {}
 
 def filter_paid_chapters(work: dict, chapters_list: List[str]):
     if work.get("paid_start") is None:
@@ -115,7 +423,29 @@ async def delete_all_records_of_work(work_name: str) -> int:
     for uid in users_to_delete:
         del records[uid]
     if removed_total > 0:
-        await save_records(records)
+        await save_records(records, allow_wipe=True)  # عملية حذف إدارية صريحة
+        await update_stats()
+    return removed_total
+
+
+async def remove_month_entries(month_key: str) -> int:
+    """حذف سجلات شهر محدد من كل الأعضاء (عند حذف الشهر من /الشهور) — يعيد عدد السجلات المحذوفة."""
+    records = await load_records()
+    removed_total = 0
+    users_to_delete = []
+    for user_id, entries in records.items():
+        kept = [e for e in entries if month_key_of(e) != month_key]
+        removed = len(entries) - len(kept)
+        if removed > 0:
+            removed_total += removed
+            if kept:
+                records[user_id] = kept
+            else:
+                users_to_delete.append(user_id)
+    for uid in users_to_delete:
+        del records[uid]
+    if removed_total > 0:
+        await save_records(records, allow_wipe=True)
         await update_stats()
     return removed_total
 
@@ -123,24 +453,40 @@ async def delete_all_records_of_work(work_name: str) -> int:
 # Core helpers (unchanged logic)
 # ----------------------------------------------------------------------
 async def load_records():
+    """كل السجلات (كل الشهور) — عند فشل الاتصال يُرفع DatabaseUnavailableError
+    بدل إرجاع قاموس فارغ، لأن متابعة الأمر ببيانات فارغة ثم الحفظ تمسح بيانات الأعضاء."""
     try:
         doc = await collection.find_one({"_id": "records"})
-        if doc and "data" in doc:
-            return doc["data"]
-        return {}
     except Exception as e:
-        print(f"[ERROR] load_records() - {e}")
-        return {}
+        raise DatabaseUnavailableError(f"تعذر الوصول إلى قاعدة البيانات: {e}") from e
+    if doc and "data" in doc:
+        return doc["data"]
+    return {}
 
-async def save_records(records):
+
+async def save_records(records, *, allow_wipe: bool = False) -> bool:
+    """حفظ السجلات — حرس مزدوج ضد فقدان البيانات:
+    1) يرفض استبدال بيانات غير فارغة بقاموس فارغ إلا في عمليات الحذف الصريحة.
+    2) عند فشل الكتابة يعيد False بدل تجاهل الخطأ صامتًا."""
+    if not records and not allow_wipe:
+        try:
+            existing = await collection.find_one({"_id": "records"}, {"data": 1})
+            if existing and existing.get("data"):
+                print("[SAFETY] save_records() رفض الكتابة: البيانات الجديدة فارغة والمحفوظ ليس فارغًا — استخدم أوامر الحذف الصريحة.")
+                return False
+        except Exception:
+            pass
     try:
         await collection.update_one(
             {"_id": "records"},
             {"$set": {"data": records}},
             upsert=True
         )
+        return True
     except Exception as e:
         print(f"[ERROR] save_records() - {e}")
+        await ensure_db_ready(force=True)
+        return False
 
 async def load_settings():
     try:
@@ -208,12 +554,14 @@ async def load_settings():
             "payment_day_sent": False
         }
 
-async def save_settings(settings):
+async def save_settings(settings) -> bool:
+    """حفظ الإعدادات — يحاول الكتابة مباشرة، وعند فشل فعلي يعيد False
+    (بدل فحص ping قسري في كل حفظ يبطئ الأوامر)."""
     settings_copy = settings.copy()
     allowed = settings_copy.get("allowed_channels", [])
     if isinstance(allowed, list):
         allowed = [
-            int(x) if isinstance(x, str) and x.isdigit() else x 
+            int(x) if isinstance(x, str) and x.isdigit() else x
             for x in allowed
         ]
         if FIXED_ALLOWED_CHANNEL not in allowed:
@@ -227,8 +575,11 @@ async def save_settings(settings):
             {"$set": settings_copy},
             upsert=True
         )
+        return True
     except Exception as e:
         print(f"[ERROR] save_settings() - {e}")
+        await ensure_db_ready(force=True)
+        return False
 
 def rebuild_prices():
     specialties = SETTINGS.get("specialties", DEFAULT_SPECIALTIES)
@@ -249,8 +600,11 @@ async def log_unauthorized(user_id, command_name):
     await log_audit("محاولة_غير_مصرح_بها", user_id, None,
                     f"محاولة استخدام الأمر {command_name} بدون صلاحية")
 
-async def update_stats():
-    records = await load_visible_records()
+async def update_stats(month_key: str | None = None):
+    """إعادة حساب إحصائيات شهر واحد (الافتراضي: الشهر النشط) — كل شهر له وثيقة مستقلة"""
+    if month_key is None:
+        month_key = get_active_month_key()
+    records = await load_visible_records(month_key)
     total_entries = sum(len(entries) for entries in records.values())
     total_amount = 0
     type_counts = {}
@@ -313,10 +667,11 @@ async def update_stats():
         "daily": {"entries": daily_entries, "amount": daily_amount},
         "weekly": {"entries": weekly_entries, "amount": weekly_amount},
         "monthly": {"entries": monthly_entries, "amount": monthly_amount},
+        "month_key": month_key,
         "last_updated": datetime.now(timezone.utc).isoformat()
     }
     await stats_collection.update_one(
-        {"_id": "stats"},
+        {"_id": f"stats:{month_key}"},
         {"$set": stat_doc},
         upsert=True
     )
@@ -395,46 +750,6 @@ def is_duplicate(records, user_id, work_name, chapter, work_type):
 # ----------------------------------------------------------------------
 # Unified UI helpers
 # ----------------------------------------------------------------------
-EMBED_COLORS = {
-    "success": discord.Color.green(),
-    "danger": discord.Color.red(),
-    "warning": discord.Color.orange(),
-    "info": discord.Color.blue(),
-    "admin": discord.Color.purple(),
-    "finance": discord.Color.gold(),
-    "muted": discord.Color.light_grey(),
-}
-
-def make_embed(kind: str, title: str, description: str = "", interaction: discord.Interaction | None = None, member: discord.Member | None = None):
-    emb = discord.Embed(title=title, description=description, color=EMBED_COLORS.get(kind, discord.Color.blurple()))
-    if member:
-        emb.set_thumbnail(url=member.display_avatar.url)
-    footer = "By ZEUS • TEAM Cookies"
-    if interaction:
-        footer += f" • {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
-    emb.set_footer(text=footer)
-    return emb
-
-class ConfirmActionView(discord.ui.View):
-    def __init__(self, on_confirm, on_preview=None, timeout=60):
-        super().__init__(timeout=timeout)
-        self._on_confirm = on_confirm
-        self._on_preview = on_preview
-
-    @discord.ui.button(label="🗑️ تأكيد الحذف", style=discord.ButtonStyle.danger)
-    async def confirm_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._on_confirm(interaction)
-
-    @discord.ui.button(label="ℹ️ عرض التفاصيل", style=discord.ButtonStyle.primary)
-    async def preview_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self._on_preview:
-            await self._on_preview(interaction)
-        else:
-            await interaction.response.send_message("لا توجد تفاصيل إضافية.", ephemeral=True)
-
-    @discord.ui.button(label="إلغاء", style=discord.ButtonStyle.secondary)
-    async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(content="تم إلغاء العملية.", view=None)
 
 
 # ----------------------------------------------------------------------

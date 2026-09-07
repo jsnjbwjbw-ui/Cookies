@@ -6,18 +6,29 @@ from discord.ext import commands
 from state import bot
 from helpers.core import (
     SETTINGS, log_unauthorized, log_audit, update_stats,
-    load_settings, save_settings, load_records, save_records, load_works, save_works
+    load_settings, save_settings, load_records, save_records, load_works, save_works,
+    entry_datetime, month_key_from_datetime, get_active_month_key,
 )
 from tasks.lifecycle import is_admin
+from ui import cards
 
+
+def _bot_avatar(interaction: discord.Interaction):
+    return interaction.client.user.display_avatar.url if interaction.client.user else None
+
+
+# ═══════════════════════════════════════════════════════════════
+# /تحديد_قنوات — بطاقة نجاح بنمط ZEUS
+# ═══════════════════════════════════════════════════════════════
 @bot.tree.command(name="تحديد_قنوات", description="تحديد القنوات المسموحة (قناتين كحد أقصى) - للإدارة فقط")
 @app_commands.checks.cooldown(1, 5, key=lambda i: (i.user.id, i.command.qualified_name))
 async def set_allowed_channels_slash(interaction: discord.Interaction,
                                      channel1: str,
                                      channel2: str = None):
+    avatar_url = _bot_avatar(interaction)
     if not is_admin(interaction):
         await log_unauthorized(interaction.user.id, "تحديد_قنوات")
-        await interaction.response.send_message("❌ ما عندك صلاحية تستخدم هذا الأمر.", ephemeral=True)
+        await interaction.response.send_message(view=cards.permission_card(avatar_url), ephemeral=True)
         return
 
     def resolve_channel(input_str: str):
@@ -44,13 +55,17 @@ async def set_allowed_channels_slash(interaction: discord.Interaction,
     channels = list(dict.fromkeys(channels))[:2]
     SETTINGS["allowed_channels"] = channels
     await save_settings(SETTINGS)
-    # تحويل القيم إلى نص لعرضها (إذا كانت رقماً نعرضها كمنشن)
     channels_str = ", ".join(
         f"<#{ch}>" if isinstance(ch, int) else f"#{ch}"
         for ch in SETTINGS["allowed_channels"]
     )
-    await interaction.response.send_message(f"✅ تم تحديث القنوات المسموحة إلى: {channels_str}", ephemeral=True)
+    await interaction.response.send_message(view=cards.success_card(
+        "تم تحديث القنوات المسموحة",
+        ["القنوات المسموحة الآن:", channels_str,
+         "-# أوامر التسجيل لن تُقبل خارج هذه القنوات."],
+        avatar_url=avatar_url), ephemeral=True)
     await log_audit("تحديد_قنوات", interaction.user.id, None, f"القنوات الجديدة: {channels_str}")
+
 
 @bot.command(name="تحديد_قنوات")
 @commands.has_permissions(manage_messages=True)
@@ -94,22 +109,31 @@ async def set_allowed_channels_text(ctx, channel1: str, channel2: str = None):
         f"<#{ch}>" if isinstance(ch, int) else f"#{ch}"
         for ch in SETTINGS["allowed_channels"]
     )
-    await ctx.send(f"✅ تم تحديث القنوات المسموحة إلى: {channels_str}")
+    avatar_url = ctx.bot.user.display_avatar.url if ctx.bot.user else None
+    await ctx.send(view=cards.success_card(
+        "تم تحديث القنوات المسموحة",
+        ["القنوات المسموحة الآن:", channels_str],
+        avatar_url=avatar_url))
     await log_audit("تحديد_قنوات", ctx.author.id, None, f"القنوات الجديدة: {channels_str}")
 
-# ----------------------------------------------------------------------
-# Command: رفع_البيانات (now also handles works)
-# ----------------------------------------------------------------------
+
+# ═══════════════════════════════════════════════════════════════
+# /رفع_البيانات — بطاقة استعادة بنمط ZEUS (قائمة مراحل ✓)
+# ═══════════════════════════════════════════════════════════════
 @bot.tree.command(name="رفع_البيانات", description="رفع ملف JSON لاستعادة السجلات والأعمال إلى MongoDB")
 @app_commands.checks.cooldown(1, 10, key=lambda i: (i.user.id, i.command.qualified_name))
 async def upload_records(interaction: discord.Interaction, file: discord.Attachment):
+    avatar_url = _bot_avatar(interaction)
     if not is_admin(interaction):
         await log_unauthorized(interaction.user.id, "رفع_البيانات")
-        await interaction.response.send_message("❌ ما عندك صلاحية تستخدم هذا الأمر.", ephemeral=True)
+        await interaction.response.send_message(view=cards.permission_card(avatar_url), ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True)
     if not file.filename.endswith('.json'):
-        await interaction.followup.send("❌ الملف يجب أن يكون بصيغة JSON.", ephemeral=True)
+        await interaction.followup.send(view=cards.error_card(
+            "الملف غير مدعوم",
+            ["الملف يجب أن يكون بصيغة JSON."],
+            avatar_url=avatar_url), ephemeral=True)
         return
     try:
         content = await file.read()
@@ -120,13 +144,25 @@ async def upload_records(interaction: discord.Interaction, file: discord.Attachm
             records_data = data.get("records", data)  # fallback to whole dict
             works_data = data.get("works", None)
         else:
-            await interaction.followup.send("❌ الملف غير صالح.", ephemeral=True)
+            await interaction.followup.send(view=cards.error_card(
+                "الملف غير صالح",
+                ["محتوى الملف غير مفهوم — ارفع ملف نسخة احتياطية صالح."],
+                avatar_url=avatar_url), ephemeral=True)
             return
 
-        # Update records
+        # Update records — مع ختم شهر كل سجل من تاريخه ليعمل فورًا مع نظام الشهور
         if not isinstance(records_data, dict):
-            await interaction.followup.send("❌ قسم records غير صالح.", ephemeral=True)
+            await interaction.followup.send(view=cards.error_card(
+                "قسم records غير صالح",
+                ["قسم السجلات في الملف غير صالح."],
+                avatar_url=avatar_url), ephemeral=True)
             return
+        for user_entries in records_data.values():
+            if isinstance(user_entries, list):
+                for entry in user_entries:
+                    if isinstance(entry, dict) and not entry.get("month_key"):
+                        dt = entry_datetime(entry)
+                        entry["month_key"] = month_key_from_datetime(dt) if dt else get_active_month_key()
         from database import collection
         await collection.update_one({"_id": "records"}, {"$set": {"data": records_data}}, upsert=True)
         total_users = len(records_data)
@@ -161,30 +197,43 @@ async def upload_records(interaction: discord.Interaction, file: discord.Attachm
                 await save_works(works_data)
                 added_works_count = len(works_data)  # override count with explicit works data
             else:
-                await interaction.followup.send("⚠️ تم تحديث السجلات لكن قسم works غير صالح (تم تجاهله).", ephemeral=True)
+                await interaction.followup.send(view=cards.error_card(
+                    "قسم works غير صالح",
+                    ["تم تحديث السجلات لكن قسم works غير صالح (تم تجاهله)."],
+                    avatar_url=avatar_url), ephemeral=True)
                 await log_audit("رفع_البيانات", interaction.user.id, None,
                                 f"تم رفع {total_entries} سجل (works غير محدثة)")
                 await update_stats()
-                await interaction.followup.send(
-                    f"✅ تم استعادة السجلات بنجاح!\nعدد المستخدمين: {total_users}\nإجمالي السجلات: {total_entries}",
-                    ephemeral=True)
                 return
 
         await log_audit("رفع_البيانات", interaction.user.id, None,
                         f"تم رفع {total_entries} سجل" + (f" و {added_works_count} عمل جديد" if added_works_count else ""))
         await update_stats()
-        msg = f"✅ تم استعادة البيانات بنجاح!\nعدد المستخدمين: {total_users}\nإجمالي السجلات: {total_entries}"
+
+        # بطاقة النجاح — قائمة مراحل ✓
+        children: list = [
+            cards.header(["## تم استعادة البيانات", "<@" + str(interaction.user.id) + ">"], avatar_url),
+            cards.sep(2),
+        ]
+        checklist = [
+            f"✓ قراءة الملف — {file.filename}",
+            f"✓ استعادة السجلات — {total_entries} سجل لـ {total_users} عضو",
+        ]
         if added_works_count:
-            msg += f"\nأعمال جديدة مضافة من السجلات: {added_works_count}"
-        if works_data is not None:
-            msg += f"\nالأعمال المحدثة من الملف: {len(works_data)}"
-        await interaction.followup.send(msg, ephemeral=True)
+            checklist.append(f"✓ استخراج الأعمال — {added_works_count} عمل")
+        if works_data is not None and isinstance(works_data, list):
+            checklist.append(f"✓ تحديث الأعمال من الملف — {len(works_data)} عمل")
+        children.append(cards.text("\n".join(checklist)))
+        children += [cards.sep(), cards.text(f"-# {cards.BOT_SIGNATURE}")]
+        await interaction.followup.send(view=cards.Card(cards.ACCENT_GREEN, *children), ephemeral=True)
     except json.JSONDecodeError:
-        await interaction.followup.send("❌ الملف ليس بصيغة JSON صحيحة.", ephemeral=True)
+        await interaction.followup.send(view=cards.error_card(
+            "الملف ليس بصيغة JSON صحيحة",
+            ["تحقق من الملف ثم أعد الرفع."],
+            avatar_url=avatar_url), ephemeral=True)
     except Exception as e:
         print(f"[ERROR] Slash command restore failed: {e}")
-        await interaction.followup.send(f"❌ حدث خطأ: {str(e)}", ephemeral=True)
-
-# ----------------------------------------------------------------------
-# Command: اوامر (help)
-# ----------------------------------------------------------------------
+        await interaction.followup.send(view=cards.error_card(
+            "فشل الرفع",
+            [f"حدث خطأ: {str(e)[:500]}"],
+            avatar_url=avatar_url), ephemeral=True)

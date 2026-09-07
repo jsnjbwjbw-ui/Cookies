@@ -1,0 +1,23 @@
+# dependencies
+node_modules/
+
+# next.js
+.next/
+out/
+
+# runtime data (يُزرع تلقائيًا في الوضع التجريبي)
+db/
+
+# env
+.env
+.env.local
+.env*.local
+
+# logs
+dev.log
+server.log
+*.log
+
+# misc
+.DS_Store
+*.pem
