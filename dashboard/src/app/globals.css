@@ -1,0 +1,404 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-cairo), "Cairo", system-ui, sans-serif;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  /* ═══ كوكيز تراكر — الهوية الذهبية ═══ */
+  --color-gold: var(--gold);
+  --color-gold-bright: var(--gold-bright);
+  --color-gold-soft: var(--gold-soft);
+  --color-gold-deep: var(--gold-deep);
+  --color-gold-dim: var(--gold-dim);
+  --color-ink-950: var(--ink-950);
+  --color-ink-900: var(--ink-900);
+  --color-ink-850: var(--ink-850);
+  --color-ink-800: var(--ink-800);
+  --color-ink-700: var(--ink-700);
+  --color-cream: var(--cream);
+  --color-cream-dim: var(--cream-dim);
+  --color-good: var(--good);
+  --color-bad: var(--bad);
+}
+
+:root {
+  --radius: 0.75rem;
+
+  /* الجوهر: أسود فحمي + ذهب معدني */
+  --gold: #d4af37;
+  --gold-bright: #f3d98b;
+  --gold-soft: #e8c96a;
+  --gold-deep: #8a6d1f;
+  --gold-dim: #6b5417;
+  --ink-950: #050505;
+  --ink-900: #0a0a0c;
+  --ink-850: #101013;
+  --ink-800: #16161a;
+  --ink-700: #202026;
+  --cream: #f5f0e1;
+  --cream-dim: #a39d8d;
+  --good: #57f287;
+  --bad: #ed4245;
+
+  --background: var(--ink-950);
+  --foreground: var(--cream);
+  --card: var(--ink-900);
+  --card-foreground: var(--cream);
+  --popover: #101014;
+  --popover-foreground: var(--cream);
+  --primary: var(--gold);
+  --primary-foreground: #161006;
+  --secondary: var(--ink-800);
+  --secondary-foreground: var(--cream);
+  --muted: var(--ink-850);
+  --muted-foreground: var(--cream-dim);
+  --accent: var(--ink-800);
+  --accent-foreground: var(--gold-bright);
+  --destructive: var(--bad);
+  --border: rgba(212, 175, 55, 0.14);
+  --input: rgba(212, 175, 55, 0.18);
+  --ring: rgba(212, 175, 55, 0.5);
+  --sidebar: var(--ink-900);
+  --sidebar-foreground: var(--cream);
+  --sidebar-primary: var(--gold);
+  --sidebar-primary-foreground: #161006;
+  --sidebar-accent: var(--ink-800);
+  --sidebar-accent-foreground: var(--gold-bright);
+  --sidebar-border: rgba(212, 175, 55, 0.12);
+  --sidebar-ring: rgba(212, 175, 55, 0.5);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-background text-foreground;
+    background-image:
+      radial-gradient(1100px 520px at 85% -10%, rgba(212, 175, 55, 0.07), transparent 60%),
+      radial-gradient(900px 480px at 8% 0%, rgba(212, 175, 55, 0.045), transparent 55%);
+    background-attachment: fixed;
+  }
+  ::selection {
+    background: rgba(212, 175, 55, 0.32);
+    color: #fff8e0;
+  }
+}
+
+/* ═══════════ خط ذهبي متدرّج متحرك ═══════════ */
+.gold-text {
+  background: linear-gradient(
+    100deg,
+    #8a6d1f 0%,
+    #d4af37 22%,
+    #f7e7ac 42%,
+    #fffbe8 50%,
+    #f7e7ac 58%,
+    #d4af37 78%,
+    #8a6d1f 100%
+  );
+  background-size: 220% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: gold-pan 7s linear infinite;
+}
+@keyframes gold-pan {
+  to {
+    background-position: 220% center;
+  }
+}
+
+.gold-text-static {
+  background: linear-gradient(100deg, #9a7a24, #e9cf7d 45%, #d4af37);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* ═══════════ بطاقات زجاجية بحواف ذهبية ═══════════ */
+.glass-card {
+  position: relative;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.008) 40%), var(--ink-900);
+  border: 1px solid rgba(212, 175, 55, 0.16);
+  border-radius: var(--radius);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 18px 50px -24px rgba(0, 0, 0, 0.85);
+  transition: border-color 0.35s ease, transform 0.35s ease, box-shadow 0.35s ease;
+}
+.glass-card:hover {
+  border-color: rgba(212, 175, 55, 0.38);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.05) inset,
+    0 18px 60px -20px rgba(0, 0, 0, 0.9),
+    0 0 42px -18px rgba(212, 175, 55, 0.35);
+}
+
+/* توهج علوي عند التحويم — بلا أي جافاسكربت */
+.spot-card::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  background: radial-gradient(420px 130px at 50% -8%, rgba(212, 175, 55, 0.16), transparent 70%);
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  pointer-events: none;
+}
+.spot-card:hover::before {
+  opacity: 1;
+}
+
+/* خط شعرة ذهبي */
+.hairline {
+  background: linear-gradient(90deg, transparent, rgba(212, 175, 55, 0.55), transparent);
+  height: 1px;
+}
+
+/* ═══════════ أزرار ذهبية بلمعة عابرة ═══════════ */
+.gold-btn {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(160deg, #ecd27f, #d4af37 55%, #b18e24);
+  color: #171006;
+  box-shadow: 0 10px 30px -12px rgba(212, 175, 55, 0.55), 0 1px 0 rgba(255, 255, 255, 0.35) inset;
+  transition: transform 0.25s ease, box-shadow 0.25s ease, filter 0.25s ease;
+}
+.gold-btn:hover {
+  filter: brightness(1.06);
+  transform: translateY(-1px);
+  box-shadow: 0 14px 38px -12px rgba(212, 175, 55, 0.7), 0 1px 0 rgba(255, 255, 255, 0.4) inset;
+}
+.gold-btn:active {
+  transform: translateY(0);
+}
+.gold-btn::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 38%;
+  left: -60%;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+  transform: skewX(-18deg);
+  animation: sheen 4.5s ease-in-out infinite;
+}
+@keyframes sheen {
+  0%, 55% { left: -60%; }
+  80%, 100% { left: 130%; }
+}
+
+/* ═══════════ نقطة "مباشر" النابضة ═══════════ */
+.live-dot {
+  position: relative;
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: var(--good);
+}
+.live-dot::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: inherit;
+  border: 1px solid rgba(87, 242, 135, 0.6);
+  animation: live-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+@keyframes live-ping {
+  0% { transform: scale(0.6); opacity: 1; }
+  80%, 100% { transform: scale(1.9); opacity: 0; }
+}
+
+/* ═══════════ عوائم ذهبية طائرة (غبار) ═══════════ */
+.dust {
+  position: absolute;
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgba(247, 231, 172, 0.95), rgba(212, 175, 55, 0.15) 65%, transparent);
+  pointer-events: none;
+  animation: dust-float var(--dur, 9s) ease-in-out infinite;
+  animation-delay: var(--delay, 0s);
+  opacity: 0.75;
+}
+@keyframes dust-float {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); opacity: 0.35; }
+  50% { transform: translate3d(var(--dx, 12px), -26px, 0) scale(1.25); opacity: 0.85; }
+}
+
+/* مدار حول الشعار */
+.orbit {
+  position: absolute;
+  inset: 0;
+  animation: orbit-spin var(--dur, 14s) linear infinite;
+  pointer-events: none;
+}
+@keyframes orbit-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ═══════════ شريط متحرك (ماركي) ═══════════ */
+.marquee {
+  overflow: hidden;
+  mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+}
+.marquee-track {
+  display: flex;
+  width: max-content;
+  gap: 3rem;
+  animation: marquee 36s linear infinite;
+}
+.marquee:hover .marquee-track {
+  animation-play-state: paused;
+}
+@keyframes marquee {
+  to { transform: translateX(50%); }
+}
+[dir="rtl"] .marquee-track {
+  animation-name: marquee-rtl;
+}
+@keyframes marquee-rtl {
+  to { transform: translateX(-50%); }
+}
+
+/* ═══════════ الظهور عند التمرير ═══════════ */
+.reveal {
+  opacity: 0;
+  transform: translateY(26px);
+  transition: opacity 0.7s cubic-bezier(0.22, 1, 0.36, 1), transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+  transition-delay: var(--reveal-delay, 0s);
+  will-change: opacity, transform;
+}
+.reveal.in {
+  opacity: 1;
+  transform: none;
+}
+
+/* دخول عناصر البث المباشر */
+.tick-in {
+  animation: tick-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes tick-in {
+  from { opacity: 0; transform: translateY(-10px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ═══════════ شريط تقدم ذهبي بلمعة ═══════════ */
+.gold-bar {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(90deg, #9a7a24, #d4af37 60%, #f3d98b);
+  box-shadow: 0 0 12px rgba(212, 175, 55, 0.4);
+}
+.gold-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, 0.5) 50%, transparent 80%);
+  transform: translateX(-100%);
+  animation: bar-shine 3.2s ease-in-out infinite;
+}
+@keyframes bar-shine {
+  60%, 100% { transform: translateX(100%); }
+}
+
+/* أرقام كبيرة بحركة نبض خفيفة عند التحديث */
+.pulse-num {
+  animation: pulse-num 0.6s ease;
+}
+@keyframes pulse-num {
+  30% { transform: scale(1.06); color: var(--gold-bright); }
+}
+
+/* ═══════════ توهجات الخلفية ═══════════ */
+.glow-orb {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(90px);
+  pointer-events: none;
+  animation: orb-drift var(--dur, 16s) ease-in-out infinite alternate;
+}
+@keyframes orb-drift {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to { transform: translate3d(var(--dx, 40px), var(--dy, -30px), 0) scale(1.12); }
+}
+
+/* شبكة خلفية خافتة */
+.bg-grid {
+  background-image:
+    linear-gradient(rgba(212, 175, 55, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(212, 175, 55, 0.05) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(ellipse 75% 60% at 50% 0%, #000 35%, transparent 78%);
+}
+
+/* ═══════════ أشرطة تمرير مخصصة ═══════════ */
+.scroll-area {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(212, 175, 55, 0.35) transparent;
+}
+.scroll-area::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-area::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 8px;
+}
+.scroll-area::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(212, 175, 55, 0.45), rgba(212, 175, 55, 0.2));
+  border-radius: 8px;
+}
+.scroll-area::-webkit-scrollbar-thumb:hover {
+  background: rgba(212, 175, 55, 0.6);
+}
+
+/* ═══════════ احترام تقليل الحركة ═══════════ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .reveal {
+    opacity: 1;
+    transform: none;
+  }
+}
