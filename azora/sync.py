@@ -1,10 +1,14 @@
 # ═══════════════════════════════════════════════════════════════
 # ⚙️ محرك مزامنة أزورا — يعمل دوريًا في الخلفية (افتراضي كل 10 دقائق):
 #
-#   1) يقصف كل صفحات الفريق → يكتشف الأعمال الجديدة ويحدّث الأعداد.
+#   1) يقصف كل صفحات أعمال الفريق عبر النداء الرسمي المُرقّم
+#      /api/teams/posts/{teamId} → يكتشف الأعمال الجديدة ويحدّث الأعداد.
 #   2) أول تشغيل = خط أساس: يُسجّل كل أعمال الفريق الحالية كمعروفة
 #      **دون** إضافتها للبوت ودون إعلانات (بما طلبه المستخدم صراحة)،
 #      ثم تُضاف فقط الأعمال التي تنزل **بعد** التفعيل.
+#      وحارسان إضافيان: أول دورة بعد التحديث الذي وسّع الفهرس من 24
+#      عملًا إلى الكامل = إعادة خط أساس، وأي دفعة جديدة تتجاوز 10
+#      أعمال في دورة واحدة لا تُضاف تلقائيًا — حماية من إضافة القديم.
 #   3) يعيد جلب أرقام فصول الأعمال **المرتبطة** عندما يتغير عددها —
 #      وتلك الأرقام هي القاعدة التي تُقيّد /تسجيل (فصل منشور فقط).
 #   4) يعلن الفصول الجديدة في القناة المحددة للأعمال المرتبطة فقط.
@@ -111,6 +115,12 @@ async def run_sync_cycle(bot_obj, manual: bool = False) -> dict:
     result = {"ok": True, "announced": 0, "auto_added": 0, "refreshed": 0,
               "team_works": len(snap.posts), "team_name": snap.team_name,
               "baseline": False, "errors": []}
+    if snap.posts_source != "api":
+        result["errors"].append(
+            "قائمة أعمال الفريق جاءت من صفحة الفريق (جزئية) — النداء الرقمي غير متاح الآن؛ "
+            "ستُكمل القائمة في دورة قادمة.")
+    if snap.team_id is not None:
+        state["team_id"] = snap.team_id
 
     team_name = snap.team_name or "COOKIES"
 
@@ -140,38 +150,68 @@ async def run_sync_cycle(bot_obj, manual: bool = False) -> dict:
         return result
 
     # ── 2) اكتشاف الجديد + تحديث الكاش ──
-    works_changed = False
+    # أ) أول دورة بعد التحديث الذي وسّع الفهرس (listing_v2) = إعادة خط
+    #    أساس: كل ما يظهر جديدًا يُسجّل معروفًا **دون إضافة** للبوت.
+    # ب) أي دفعة جديدة > 10 أعمال في دورة واحدة تُسجّل معروفة دون إضافة
+    #    (توسّع فهرس وليست أعمالًا نزلت الآن) + ملاحظة للوحة.
+    # ج) غير ذلك: الجديد (1-10) يُضاف تلقائيًا إن كانت الإضافة مفعلة.
+    entries_by_slug: dict[str, dict] = {}
     for p in snap.posts:
         slug = str(p.get("slug") or "")
         if not slug:
             continue
-        entry = {
+        entries_by_slug[slug] = {
             "post_id": p.get("id"), "title_en": p.get("postTitle") or "",
             "cover": p.get("featuredImage") or "",
             "chapter_count": (p.get("_count") or {}).get("chapters", 0),
             "updated_at": p.get("updatedAt") or "",
         }
-        if slug not in known:
+
+    new_slugs = [s for s in entries_by_slug if s not in known]
+    works_changed = False
+    listing_v2 = bool(state.get("listing_v2"))
+    backfill = (not listing_v2) or len(new_slugs) > 10
+
+    if backfill:
+        for slug in new_slugs:
+            entry = dict(entries_by_slug[slug])
             entry["first_seen"] = _now_iso()
             known[slug] = entry
+        if not listing_v2:
+            state["listing_v2"] = True
+            result["rebaseline"] = len(new_slugs)
+        else:
+            result["backfilled"] = len(new_slugs)
+            result["errors"].append(
+                f"ظهر {len(new_slugs)} عملًا جديدًا في دفعة واحدة — سُجّلوا معروفين "
+                "دون إضافة تلقائية احتياطًا؛ اربط ما تريد منها من لوحة أزورا.")
+    else:
+        for slug in new_slugs:
+            entry = dict(entries_by_slug[slug])
+            entry["first_seen"] = _now_iso()
+            known[slug] = entry
+            e = entries_by_slug[slug]
             if state.get("auto_add_new_works", True):
                 existing = next((w for w in works if (w.get("azora") or {}).get("slug") == slug), None)
-                if existing is None and get_by_title(works, entry["title_en"]) is None:
+                if existing is None and get_by_title(works, e["title_en"]) is None:
                     works.append({
-                        "name": entry["title_en"] or slug,
+                        "name": e["title_en"] or slug,
                         "paid_start": None,
                         "active": True,
                         "azora": {
-                            "slug": slug, "post_id": entry["post_id"],
-                            "title_en": entry["title_en"], "cover": entry["cover"],
+                            "slug": slug, "post_id": e["post_id"],
+                            "title_en": e["title_en"], "cover": e["cover"],
                             "team_name": team_name,
                             "linked_at": _now_iso(), "linked_by": "azora-sync",
                         },
                     })
                     works_changed = True
                     result["auto_added"] += 1
-        else:
-            known[slug].update(entry)
+
+    # تحديث بيانات المعروف (العداد/الغلاف/الاسم) لكل الأعمال المكتشفة
+    for slug, e in entries_by_slug.items():
+        if slug in known:
+            known[slug].update(e)
 
     if works_changed:
         await save_works(works)

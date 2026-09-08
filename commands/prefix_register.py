@@ -43,13 +43,23 @@ def allowed_types_for(work: dict) -> list[str]:
     return list(PRICES.keys())
 
 
+def _page_of(items: list, page: int, per: int) -> tuple[list, int]:
+    """تقطيع قائمة لصفحات — (عناصر الصفحة, عدد الصفحات الكلي)."""
+    total = max(1, (len(items) + per - 1) // per)
+    page = min(max(0, page), total - 1)
+    return items[page * per: (page + 1) * per], total
+
+
 class WizardSession:
+    PER_PAGE = 25  # حد ديسكورد للقائمة المنسدلة — فوقه نظام صفحات
+
     def __init__(self, member: discord.Member, guild_id: int, channel_id: int):
         self.member = member
         self.guild_id = guild_id
         self.channel_id = channel_id
         self.message = None             # بطاقة البوت الحية
         self.step = "pick_work"         # pick_work | chapters | types | confirm | notes
+        self.page = 0                   # صفحة قائمة اختيار العمل
         self.work = None
         self.chapters_list = []
         self.paid_chapters = []
@@ -104,6 +114,19 @@ class WizardSession:
             avatar_url=_bot_avatar()), ephemeral=True)
 
     # ── أفعال القوائم والأزرار ──
+    async def _wp_prev(self, interaction: discord.Interaction):
+        """صفحة سابقة في قائمة اختيار العمل — التنقل مفتوح للجميع
+        (مجرد عرض)، أما الاختيار فمحصور بصاحب الجلسة."""
+        self.page = max(0, self.page - 1)
+        await interaction.response.edit_message(
+            view=cards.Card(cards.ACCENT_GOLD, *await self._work_pick_children()))
+
+    async def _wp_next(self, interaction: discord.Interaction):
+        """صفحة تالية في قائمة اختيار العمل — التنقل مفتوح للجميع."""
+        self.page += 1
+        await interaction.response.edit_message(
+            view=cards.Card(cards.ACCENT_GOLD, *await self._work_pick_children()))
+
     async def select_work(self, interaction: discord.Interaction):
         if self._not_owner(interaction):
             await self._deny_other(interaction)
@@ -118,6 +141,7 @@ class WizardSession:
             return
         self.work = work
         self.step = "chapters"
+        self.page = 0
         self.touch()
         await interaction.response.edit_message(
             view=cards.Card(cards.ACCENT_GOLD, *await self._chapters_children()))
@@ -293,8 +317,10 @@ class WizardSession:
     async def _work_pick_children(self, notice: str | None = None) -> list:
         works = await load_works()
         usable = [w for w in works if w.get("active", True) and not is_work_isolated(w)]
+        page_items, total_pages = _page_of(usable, self.page, self.PER_PAGE)
         children: list = [
-            cards.header(["## تسجيل تفاعلي", f"{self.member.mention} — اختر العمل من القائمة."],
+            cards.header(["## تسجيل تفاعلي",
+                          f"{self.member.mention} — اختر العمل من القائمة."],
                          _member_avatar(self.member)),
             cards.sep(2),
         ]
@@ -304,16 +330,22 @@ class WizardSession:
         if not usable:
             children.append(cards.text("لا توجد أعمال متاحة للتسجيل حاليًا — تواصل مع الإدارة."))
         else:
+            children.append(cards.text(
+                f"-# **الخطوة 1 من 4** — اختيار العمل • **{len(usable)}** عمل متاح"
+                + (f" • صفحة {self.page + 1} من {total_pages}" if total_pages > 1 else "")))
+            children.append(cards.sep())
             options = []
-            for w in usable[:25]:
+            for w in page_items:
                 ps = w.get("paid_start")
                 desc = "كل الفصول مدفوعة" if ps is None else f"يبدأ الدفع من فصل {ps}"
                 options.append(discord.SelectOption(
                     label=cards.clamp(w["name"], 100), value=w["name"],
                     description=cards.clamp(desc, 100), emoji="📖"))
-            children.append(cards.text("-# **الخطوة 1 من 4** — اختيار العمل."))
-            children.append(cards.sep())
             children.append(cards.make_select("اختر العمل...", options, self.select_work))
+            if total_pages > 1:
+                children.append(cards.sep())
+                children.append(cards.pager_row(
+                    self.page, total_pages, self._wp_prev, self._wp_next))
         children += [cards.sep(), cards.row(cards.secondary_btn("إلغاء", self.cancel)),
                      cards.sep(), cards.text(f"-# {cards.BOT_SIGNATURE}")]
         return children

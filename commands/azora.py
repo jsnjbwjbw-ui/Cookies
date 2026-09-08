@@ -342,6 +342,14 @@ class AzoraHubView(SafeLayoutView):
             f"**فصول أُعلن عنها:** {result.get('announced', 0)}",
             f"**كاش فصول مُحدَّث:** {result.get('refreshed', 0)}",
         ]
+        if result.get("rebaseline") is not None:
+            lines.append(
+                f"**فهرس أعمال الفريق اكتمل لأول مرة:** سُجّل {result['rebaseline']} عملًا "
+                "إضافيًا معروفًا **دون إضافتها للبوت** — اربط ما تريد منها من زر «ربط عمل».")
+        if result.get("backfilled") is not None:
+            lines.append(
+                f"**دفعة توسّع فهرس:** {result['backfilled']} عملًا سُجّلوا معروفين "
+                "دون إضافة تلقائية احتياطًا — اربطها يدويًا متى شئت.")
         if result.get("errors"):
             lines.append("**ملاحظات:**")
             lines.extend(f"• {cards.clamp(e, 180)}" for e in result["errors"][:4])
@@ -367,14 +375,20 @@ class AzoraHubView(SafeLayoutView):
                 "أو **ربط تلقائي بالأسماء**."))
         else:
             chapters_cache = await store.load_chapters_cache()
+            team_cache = (await store.load_cache())["works"]
             page_items, total_pages = _page_of(linked, self.page, self.PER_PAGE)
             for w in page_items:
                 link = w["azora"]
                 cached = chapters_cache.get(link["slug"]) or {}
-                count = cached.get("count", "—")
+                count = cached.get("count")
+                source_note = ""
+                if count is None:
+                    # الكاش الرقمي لم يُجلب بعد — نعرض عدد الفريق الورقي إن وجد
+                    count = (team_cache.get(link["slug"]) or {}).get("chapter_count")
+                    source_note = " (من كاش الفريق — الرقمي يُجلب بالمزامنة)" if count is not None else ""
                 children.append(cards.text(
                     f"**{w.get('name')}**\n"
-                    f"-# أزورا: `{link['slug']}` • الفصول المنشورة: {count} • "
+                    f"-# أزورا: `{link['slug']}` • الفصول المنشورة: {count if count is not None else '—'}{source_note} • "
                     f"ارتبط {_fmt_ago(link.get('linked_at'))}"))
             children.append(cards.sep())
             children.append(cards.pager_row(self.page, total_pages,
@@ -645,11 +659,16 @@ class AzoraHubView(SafeLayoutView):
         if not linked:
             children.append(cards.text("لا توجد أعمال مرتبطة."))
         else:
+            page_items, total_pages = _page_of(linked, self.page, 25)
             options = [discord.SelectOption(
                 label=cards.clamp(f"{w.get('name', '')} — {w['azora']['slug']}", 100),
                 value=w.get("name", ""), emoji="🔗")
-                for w in linked[:25]]
+                for w in page_items]
             children.append(cards.make_select("اختر العمل...", options, self._unlink_picked))
+            if total_pages > 1:
+                children.append(cards.sep())
+                children.append(cards.pager_row(self.page, total_pages,
+                                                self._prev_page, self._next_page))
         children += [cards.sep(),
                      cards.row(cards.secondary_btn("عودة إلى أزورا", self._back_to_hub, emoji="↩")),
                      cards.sep(), cards.text(f"-# {cards.BOT_SIGNATURE}")]
@@ -983,8 +1002,10 @@ class AzoraHubView(SafeLayoutView):
             return
         state = await store.load_state()
         state["team_slug"] = new_slug
+        state["team_id"] = data.get("team_id")
         state["team_name"] = team_name
         state["baseline_done"] = False  # فريق جديد = خط أساس جديد
+        state["listing_v2"] = False     # فريق جديد = فهرس أعمال جديد من الصفر
         await store.save_state(state)
         await store.save_cache({"works": {}, "seen_chapter_ids": []})
         await log_audit("اعدادات_أزورا", 0, None, f"رابط الفريق ← {new_slug}")

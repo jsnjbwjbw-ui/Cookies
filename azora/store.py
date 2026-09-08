@@ -24,12 +24,14 @@ from azora.client import DEFAULT_TEAM_SLUG
 
 DEFAULT_STATE = {
     "team_slug": DEFAULT_TEAM_SLUG,
+    "team_id": None,
     "enabled": True,
     "auto_add_new_works": True,
     "announcements_enabled": True,
     "sync_interval_minutes": 10,
     "announce_channel_id": None,
     "baseline_done": False,
+    "listing_v2": False,
     "last_sync_at": None,
     "last_sync_ok": None,
     "last_error": None,

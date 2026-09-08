@@ -42,13 +42,21 @@ async def published_numbers(slug: str) -> set[str]:
 
 
 async def unpublished_chapters(work: dict, chapters: list[str]) -> list[str]:
-    """الفصول المطلوبة غير المنشورة بعد على أزورا (للأعمال المرتبطة فقط)."""
+    """الفصول المطلوبة غير المنشورة بعد على أزورا (للأعمال المرتبطة فقط).
+
+    منطق الحكم بدقة:
+    • لا يوجد كاش أصلًا → لا حجب بلا دليل (المزامنة تعبئ الكاش فورًا).
+    • يوجد كاش بعدد 0 (صفر فصول منشورة فعليًا) → كل الفصول المطلوبة
+      غير منشورة → حجب كامل. هذه الحالة تصير فقط بجلب ناجح بعد إصلاح
+      جلب الفصول، فالحكم فيها صحيح ومقصود."""
     link = get_azora_link(work)
     if not link:
         return []
-    published = await published_numbers(link["slug"])
-    if not published:
+    from azora import store
+    entry = await store.get_cached_chapters(link["slug"])
+    if not entry:
         return []  # لا كاش بعد: لا نحجب بلا دليل — المزامنة تعبئه فورًا
+    published = {normalize_chapter(n) for n in entry.get("numbers", [])}
     return [ch for ch in chapters if normalize_chapter(ch) not in published]
 
 
