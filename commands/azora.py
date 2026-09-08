@@ -427,11 +427,7 @@ class AzoraHubView(SafeLayoutView):
         works = await load_works()
         cache = await store.load_cache()
 
-        # كل أعمال البوت تُعرض هنا بلا أي تصفية أو إخفاء (المرتبطة وغير المرتبطة)،
-        # والترتيب = ترتيب قاعدة البيانات الأصلي حرفيًا (نفس مصدر /الأعمال) دون
-        # أي إعادة ترتيب تعتمد على كاش أزورا المتغير — فلا يختفي أي عمل أبدًا
-        # ولا يقفز بين الصفحات، وعند إضافة عمل جديد يظهر آخر القائمة دون إزاحة.
-        # المرتبطة بوسم ✓ واختيارها يفتح تحديث ربطها بدل تكرار الربط.
+        unlinked = [w for w in works if not w.get("azora")]
 
         def rank_of(w):
             best = 2
@@ -441,50 +437,33 @@ class AzoraHubView(SafeLayoutView):
                     break
             return best
 
-        page_items, total_pages = _page_of(works, self.page, 25)
+        page_items, total_pages = _page_of(unlinked, self.page, 25)
         self.page = min(max(0, self.page), total_pages - 1)
 
-        linked_count = sum(1 for w in works if w.get("azora"))
         children = [cards.header(["## ربط عمل بأزورا",
                                   "الخطوة 1 من 2 — اختر عمل البوت."],
                                  _bot_avatar()), cards.sep(2)]
-        children.append(cards.text(
-            f"**كل أعمال البوت معروضة هنا بلا أي إخفاء** — {len(works)} عمل: "
-            f"غير مرتبط {len(works) - linked_count} • مرتبط {linked_count} (بوسم ✓).\n"
-            "الترتيب ثابت مثل /الأعمال — إضافة عمل جديد تظهر آخر القائمة ولا تُزيح شيئًا."))
         if self.notice:
-            children += [cards.sep(), cards.text(cards.clamp(self.notice, 1000))]
-        children.append(cards.sep())
+            children += [cards.text(cards.clamp(self.notice, 1000)), cards.sep()]
 
         if not works:
             children.append(cards.text(
                 "لا توجد أعمال في القائمة — أضف أعمالًا أولًا من /اضافة_عمل."))
+        elif not unlinked:
+            children.append(cards.text("كل الأعمال مرتبطة بأزورا."))
         elif not cache["works"]:
             children.append(cards.text(
                 "قائمة أعمال الفريق في أزورا فارغة بعد — نفّذ **مزامنة الآن** أولًا "
                 "حتى تُبنى وتظهر الاقتراحات الذكية."))
         else:
-            hints = {0: "مطابقة تامة على أزورا — جاهز للربط الفوري",
-                     1: "اسم قريب من عمل على أزورا",
-                     2: "بلا اقتراح مباشر — اختر المقابل يدويًا في الخطوة 2"}
             star = {0: "★ ", 1: "☆ "}
             options = []
             for w in page_items:
-                name = w.get("name", "")
-                if w.get("azora"):
-                    cur_slug = str((w.get("azora") or {}).get("slug") or "")
-                    options.append(discord.SelectOption(
-                        label=cards.clamp(f"✓ {name}", 100),
-                        value=name,
-                        description=cards.clamp(f"مرتبط: {cur_slug} — الاختيار يحدّث الرابط", 100),
-                        emoji="📖"))
-                else:
-                    rank = rank_of(w)
-                    options.append(discord.SelectOption(
-                        label=cards.clamp(star.get(rank, "") + name, 100),
-                        value=name,
-                        description=cards.clamp(hints.get(rank, hints[2]), 100),
-                        emoji="📖"))
+                rank = rank_of(w)
+                options.append(discord.SelectOption(
+                    label=cards.clamp(star.get(rank, "") + w.get("name", ""), 100),
+                    value=w.get("name", ""),
+                    emoji="📖"))
             children.append(cards.make_select("اختر عمل البوت...", options, self._link_work_picked))
             if total_pages > 1:
                 children += [cards.sep(),
@@ -529,13 +508,6 @@ class AzoraHubView(SafeLayoutView):
                          _bot_avatar()),
             cards.sep(2),
         ]
-        if current_slug:
-            children.append(cards.text(
-                f"**تحديث ربط:** هذا العمل مرتبط حاليًا بـ `{current_slug}` — اختيار عمل "
-                "آخر يستبدل الرابط بعد التأكيد، وسجلات العمل لا تُمسّ بشيء."))
-        children.append(cards.text(
-            "الاقتراحات تظهر أولًا (★ مطابقة، ☆ قريب) — والرابط الحالي بوسم (الحالي)، "
-            "وما هو مرتبط بأعمال أخرى بوسم (مرتبط) ولا يُقبل اختياره."))
         if self.notice:
             children += [cards.sep(), cards.text(cards.clamp(self.notice, 1000))]
         children.append(cards.sep())
