@@ -26,7 +26,7 @@ from helpers.core import (
     load_records, log_audit,
 )
 from azora import client, store
-from azora.sync import run_sync_cycle
+from azora.sync import run_sync_cycle, build_announcement_card, ANNOUNCE_GIF_URL
 from ui import cards
 
 
@@ -130,6 +130,7 @@ class AzoraHubView(SafeLayoutView):
         self.azora_page = 0       # موضع المستخدم في قائمة أعمال أزورا (خطوة 2)
         self.pending_unlink: dict | None = None
         self.pending_rename: dict | None = None
+        self.pending_roles_work: dict | None = None
 
     # ── البناء والتنقل ──
     @classmethod
@@ -218,6 +219,12 @@ class AzoraHubView(SafeLayoutView):
             return await self._rename_wait_children()
         if mode == "channel_pick":
             return await self._channel_children()
+        if mode == "roles_pick":
+            return await self._roles_pick_children()
+        if mode == "roles_set":
+            return await self._roles_set_children()
+        if mode == "preview_pick":
+            return await self._preview_pick_children()
         if mode == "interval_wait":
             return await self._interval_wait_children()
         if mode == "slug_wait":
@@ -301,6 +308,10 @@ class AzoraHubView(SafeLayoutView):
                 cards.secondary_btn("إعلانات: " + ("مفعلة" if ann else "معطلة"), self._toggle_announcements),
                 cards.secondary_btn("مدة المزامنة", self._open_interval_set),
                 cards.secondary_btn("رابط الفريق", self._open_team_slug_set),
+            ),
+            cards.row(
+                cards.secondary_btn("أدوار الأعمال", self._open_roles_pick),
+                cards.secondary_btn("معاينة إعلان", self._open_preview_pick),
             ),
         ]
         children += self._back_row()
@@ -937,6 +948,160 @@ class AzoraHubView(SafeLayoutView):
         await self._show(interaction,
                          f"قناة الإعلانات أصبحت <#{channel_id}> — ستظهر فيها إعلانات "
                          "الفصول الجديدة للأعمال المرتبطة فور نزولها.")
+
+    # ══════════════════════════════════════════════════════════
+    # 7.5) أدوار الأعمال + معاينة الإعلان
+    # ══════════════════════════════════════════════════════════
+    async def _open_roles_pick(self, interaction: discord.Interaction):
+        self.mode = "roles_pick"
+        self.page = 0
+        await self._show(interaction)
+
+    async def _roles_pick_children(self) -> list:
+        works = await load_works()
+        children = [cards.header(["## أدوار الأعمال",
+                                  "اختر عملاً لربطه برتبة تُمنشن تحت اسمه في إعلان نزول الفصل."],
+                                 _bot_avatar()), cards.sep(2)]
+        if not works:
+            children.append(cards.text("لا توجد أعمال في القائمة — أضف أعمالًا أولًا من /اضافة_عمل."))
+        else:
+            page_items, total_pages = _page_of(works, self.page, 25)
+            self.page = min(max(0, self.page), total_pages - 1)
+            options = [discord.SelectOption(
+                label=cards.clamp(("✓ " if w.get("role_id") else "") + w.get("name", ""), 100),
+                value=w.get("name", ""), emoji="📖")
+                for w in page_items]
+            children.append(cards.make_select("اختر العمل...", options, self._roles_picked))
+            if total_pages > 1:
+                children.append(cards.sep())
+                children.append(cards.pager_row(self.page, total_pages,
+                                                self._prev_page, self._next_page))
+        children += [cards.sep(),
+                     cards.row(cards.secondary_btn("عودة إلى أزورا", self._back_to_hub, emoji="↩")),
+                     cards.sep(), cards.text(f"-# {cards.BOT_SIGNATURE}")]
+        return children
+
+    async def _roles_picked(self, interaction: discord.Interaction):
+        name = interaction.data["values"][0]
+        works = await load_works()
+        work = next((w for w in works if w.get("name") == name), None)
+        if not work:
+            await self._show(interaction, f"العمل **{name}** لم يعد موجودًا.")
+            return
+        self.pending_roles_work = work
+        self.mode = "roles_set"
+        await self._show(interaction)
+
+    async def _roles_set_children(self) -> list:
+        work = self.pending_roles_work or {}
+        select = ui.RoleSelect(placeholder="اختر الرتبة...", min_values=1, max_values=1)
+        select.callback = self._role_selected
+        children = [
+            cards.header(["## ربط رتبة بعمل",
+                          f"**{work.get('name')}**"], _bot_avatar()),
+            cards.sep(2),
+        ]
+        if work.get("role_id"):
+            children += [cards.text(f"**الرتبة الحالية:** <@&{int(work['role_id'])}>"), cards.sep()]
+        children += [
+            ui.ActionRow(select),
+            cards.sep(),
+            cards.row(
+                cards.secondary_btn("إزالة الرتبة", self._role_remove,
+                                    disabled=not work.get("role_id")),
+                cards.secondary_btn("عودة إلى أزورا", self._back_to_hub, emoji="↩"),
+            ),
+            cards.sep(), cards.text(f"-# {cards.BOT_SIGNATURE}"),
+        ]
+        return children
+
+    async def _role_selected(self, interaction: discord.Interaction):
+        role_id = int(interaction.data["values"][0])
+        name = (self.pending_roles_work or {}).get("name", "")
+        works = await load_works()
+        work = next((w for w in works if w.get("name") == name), None)
+        if not work:
+            await self._show(interaction, f"العمل **{name}** لم يعد موجودًا.")
+            return
+        work["role_id"] = role_id
+        if not await save_works(works):
+            await self._show(interaction, "تعذر الحفظ — قاعدة البيانات غير متاحة.")
+            return
+        await log_audit("اعدادات_أزورا", 0, None, f"رتبة العمل «{name}» ← {role_id}")
+        self.mode = "hub"
+        await self._show(interaction,
+                         f"رتبة **{name}** أصبحت <@&{role_id}> — ستُمنشن تحت اسمه في إعلان نزول الفصل.")
+
+    async def _role_remove(self, interaction: discord.Interaction):
+        name = (self.pending_roles_work or {}).get("name", "")
+        works = await load_works()
+        work = next((w for w in works if w.get("name") == name), None)
+        if not work:
+            await self._show(interaction, f"العمل **{name}** لم يعد موجودًا.")
+            return
+        work.pop("role_id", None)
+        if not await save_works(works):
+            await self._show(interaction, "تعذر الحفظ — قاعدة البيانات غير متاحة.")
+            return
+        await log_audit("اعدادات_أزورا", 0, None, f"أُزيلت رتبة العمل «{name}»")
+        self.mode = "hub"
+        await self._show(interaction, f"أُزيلت الرتبة من **{name}** — لن يُمنشن أحد في إعلانه.")
+
+    async def _open_preview_pick(self, interaction: discord.Interaction):
+        self.mode = "preview_pick"
+        self.page = 0
+        await self._show(interaction)
+
+    async def _preview_pick_children(self) -> list:
+        works = await load_works()
+        linked = [w for w in works if w.get("azora")]
+        children = [cards.header(["## معاينة إعلان نزول فصل",
+                                  "اختر عملًا مرتبطًا لتراه كما سيظهر في قناة الإعلانات."],
+                                 _bot_avatar()), cards.sep(2)]
+        if not linked:
+            children.append(cards.text("لا توجد أعمال مرتبطة — اربط عملًا أولًا."))
+        else:
+            page_items, total_pages = _page_of(linked, self.page, 25)
+            self.page = min(max(0, self.page), total_pages - 1)
+            options = [discord.SelectOption(
+                label=cards.clamp(w.get("name", ""), 100),
+                value=w.get("name", ""), emoji="📖")
+                for w in page_items]
+            children.append(cards.make_select("اختر العمل...", options, self._preview_picked))
+            if total_pages > 1:
+                children.append(cards.sep())
+                children.append(cards.pager_row(self.page, total_pages,
+                                                self._prev_page, self._next_page))
+        children += [cards.sep(),
+                     cards.row(cards.secondary_btn("عودة إلى أزورا", self._back_to_hub, emoji="↩")),
+                     cards.sep(), cards.text(f"-# {cards.BOT_SIGNATURE}")]
+        return children
+
+    async def _preview_picked(self, interaction: discord.Interaction):
+        name = interaction.data["values"][0]
+        works = await load_works()
+        work = next((w for w in works if w.get("name") == name), None)
+        if not work:
+            await self._show(interaction, f"العمل **{name}** لم يعد موجودًا.")
+            return
+        await interaction.response.defer()
+        slug = str((work.get("azora") or {}).get("slug") or "")
+        chapter: dict | None = None
+        try:
+            chapters = await asyncio.wait_for(client.fetch_work_chapters(slug), timeout=25)
+            if chapters:
+                chapter = chapters[-1]
+        except Exception:
+            chapter = None
+        if chapter is None:
+            await interaction.followup.send(
+                "تعذر جلب فصول هذا العمل من أزورا الآن — جرّب مرة أخرى بعد قليل.",
+                ephemeral=True)
+            return
+        await interaction.followup.send(
+            embed=discord.Embed().set_image(url=ANNOUNCE_GIF_URL), ephemeral=True)
+        await interaction.followup.send(
+            view=build_announcement_card(work, chapter, ""), ephemeral=True)
 
     # ══════════════════════════════════════════════════════════
     # 8) المفاتيح والمدة ورابط الفريق

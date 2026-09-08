@@ -11,7 +11,8 @@
 #      أعمال في دورة واحدة لا تُضاف تلقائيًا — حماية من إضافة القديم.
 #   3) يعيد جلب أرقام فصول الأعمال **المرتبطة** عندما يتغير عددها —
 #      وتلك الأرقام هي القاعدة التي تُقيّد /تسجيل (فصل منشور فقط).
-#   4) يعلن الفصول الجديدة في القناة المحددة للأعمال المرتبطة فقط.
+#   4) يعلن الفصول الجديدة في القناة المحددة للأعمال المرتبطة فقط
+#      (صورة تنظيم ثابتة قبل كل إعلان + منشن رتبة العمل إن وُجدت).
 #
 #   كل فشل يُسجَّل في حالة النظام ويظهر في /أزورا — الحلقة لا تنكسر
 #   أبدًا، وقاعدة البيانات محمية (فشل DB يلغي الدورة فورًا).
@@ -29,6 +30,9 @@ from database import DatabaseUnavailableError
 from azora import client, store
 from azora.client import AzoraError, chapter_url
 from ui import cards
+
+
+ANNOUNCE_GIF_URL = "https://iili.io/n3p13R1.gif"
 
 
 def _now_iso() -> str:
@@ -70,6 +74,11 @@ def build_announcement_card(work: dict, chapter: dict, uploader: str) -> cards.C
 
     children: list = [
         cards.header(["## نزول فصل جديد", f"**{display}**"], cover),
+    ]
+    role_id = work.get("role_id")
+    if role_id:
+        children.append(cards.text(f"<@&{int(role_id)}>"))
+    children += [
         cards.sep(2),
         cards.text(
             f"**الفصل:** {number}\n"
@@ -239,6 +248,10 @@ async def run_sync_cycle(bot_obj, manual: bool = False) -> dict:
         if not work or not channel:
             continue
         try:
+            try:
+                await channel.send(ANNOUNCE_GIF_URL)
+            except Exception:
+                pass
             await channel.send(view=build_announcement_card(
                 work, ch, ((ch.get("createdBy") or {}).get("name") or "")))
             result["announced"] += 1
