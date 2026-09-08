@@ -4,8 +4,8 @@
 #   • حالة النظام: الفريق، الأعمال المعروفة، المرتبطة، آخر مزامنة،
 #     قناة الإعلانات، المفاتيح، مدة المزامنة — كل معلومة بسطر.
 #   • مزامنة الآن — تنفّذ دورة كاملة فورًا ويعرض التقرير.
-#   • ربط عمل ← اختيار عمل البوت ثم عمل أزورا (سيلكت + اقتراح ذكي
-#     بالأسماء) ← تأكيد ← جلب فصول فوري — بلا كتابة إطلاقًا.
+#   • ربط عمل ← كل أعمال البوت بترتيب ثابت (المرتبطة بوسم ✓ واختيارها
+#     يحدّث الرابط) ثم عمل أزورا (سيلكت + اقتراح ذكي) ← تأكيد ← جلب فصول فوري.
 #   • ربط تلقائي بالأسماء — يربط كل ما تطابق أسماؤه بنفسه.
 #   • فك ربط، تسمية عربية (مع ترحيل سجلات العمل إلى الاسم الجديد)،
 #     قناة الإعلانات (سيلكت قنوات)، مفاتيح النظام، مدة المزامنة،
@@ -126,6 +126,8 @@ class AzoraHubView(SafeLayoutView):
         self.notice: str | None = None
         self.pending_link_work: dict | None = None
         self.pending_link_slug: str | None = None
+        self.link_work_page = 0   # موضع المستخدم في قائمة أعمال البوت (خطوة 1)
+        self.azora_page = 0       # موضع المستخدم في قائمة أعمال أزورا (خطوة 2)
         self.pending_unlink: dict | None = None
         self.pending_rename: dict | None = None
 
@@ -404,6 +406,8 @@ class AzoraHubView(SafeLayoutView):
     async def _open_link_pick_work(self, interaction: discord.Interaction):
         self.mode = "link_pick_work"
         self.page = 0
+        self.link_work_page = 0
+        self.azora_page = 0
         self.pending_link_work = None
         self.pending_link_slug = None
         await self._show(interaction)
@@ -422,32 +426,66 @@ class AzoraHubView(SafeLayoutView):
     async def _link_pick_work_children(self) -> list:
         works = await load_works()
         cache = await store.load_cache()
-        unlinked = [w for w in works if not w.get("azora")]
 
-        def suggestion(w):
+        # ترتيب مستقر ومحدد تمامًا: الاقتراحات الذكية تتصدر (★ ثم ☆) ثم بقية
+        # غير المرتبطة ثم المرتبطة بوسم ✓ — وداخل كل مجموعة يبقى ترتيب قاعدة
+        # البيانات الأصلي كما هو، فلا يقفز أي عمل بين الصفحات مهما تغيّر كاش
+        # أزورا أو أُضيف عمل جديد — نفس اكتمال قائمة /الأعمال.
+        def rank_of(w):
             best = 2
             for _slug, entry in cache["works"].items():
                 best = min(best, self._suggest_rank(w.get("name", ""), entry.get("title_en", "")))
+                if best == 0:
+                    break
             return best
 
-        unlinked.sort(key=suggestion)
-        page_items, total_pages = _page_of(unlinked, self.page, 25)
+        grouped = sorted(
+            ((rank_of(w), idx, w) for idx, w in enumerate(works)),
+            key=lambda t: (3 if t[2].get("azora") else t[0], t[1]),
+        )
+        page_tuples, total_pages = _page_of(grouped, self.page, 25)
+        self.page = min(max(0, self.page), total_pages - 1)
+
+        linked_count = sum(1 for w in works if w.get("azora"))
         children = [cards.header(["## ربط عمل بأزورا",
-                                  "الخطوة 1 من 2 — اختر عمل البوت غير المرتبط."],
+                                  "الخطوة 1 من 2 — اختر عمل البوت."],
                                  _bot_avatar()), cards.sep(2)]
-        if not unlinked:
-            children.append(cards.text("كل الأعمال مرتبطة أصلًا أو لا توجد أعمال في القائمة."))
+        children.append(cards.text(
+            f"**كل أعمال البوت معروضة هنا** — {len(works)} عمل: "
+            f"غير مرتبط {len(works) - linked_count} • مرتبط {linked_count}.\n"
+            "الاقتراحات تتصدر القائمة (★ مطابقة، ☆ قريب)، والأعمال المرتبطة بوسم ✓ "
+            "آخر القائمة — اختيار عمل مرتبط يفتح **تحديث ربطه** بدل تكرار الربط."))
+        if self.notice:
+            children += [cards.sep(), cards.text(cards.clamp(self.notice, 1000))]
+        children.append(cards.sep())
+
+        if not works:
+            children.append(cards.text(
+                "لا توجد أعمال في القائمة — أضف أعمالًا أولًا من /اضافة_عمل."))
         elif not cache["works"]:
             children.append(cards.text(
-                "قائمة أعمال الفريق فارغة بعد — نفّذ **مزامنة الآن** أولًا حتى تُبنى."))
+                "قائمة أعمال الفريق في أزورا فارغة بعد — نفّذ **مزامنة الآن** أولًا "
+                "حتى تُبنى وتظهر الاقتراحات الذكية."))
         else:
-            star = {0: "★ مطابقة — ", 1: "☆ قريب — "}
+            hints = {0: "مطابقة تامة على أزورا — جاهز للربط الفوري",
+                     1: "اسم قريب من عمل على أزورا",
+                     2: "غير مرتبط بعد"}
             options = []
-            for w in page_items:
-                prefix = star.get(suggestion(w), "")
-                options.append(discord.SelectOption(
-                    label=cards.clamp(prefix + w.get("name", ""), 100),
-                    value=w.get("name", ""), emoji="📖"))
+            for rank, _idx, w in page_tuples:
+                name = w.get("name", "")
+                if w.get("azora"):
+                    cur_slug = str((w.get("azora") or {}).get("slug") or "")
+                    options.append(discord.SelectOption(
+                        label=cards.clamp(f"✓ {name}", 100),
+                        value=name,
+                        description=cards.clamp(f"مرتبط: {cur_slug} — الاختيار يحدّث الرابط", 100),
+                        emoji="📖"))
+                else:
+                    options.append(discord.SelectOption(
+                        label=cards.clamp({0: "★ ", 1: "☆ "}.get(rank, "") + name, 100),
+                        value=name,
+                        description=cards.clamp(hints.get(rank, hints[2]), 100),
+                        emoji="📖"))
             children.append(cards.make_select("اختر عمل البوت...", options, self._link_work_picked))
             if total_pages > 1:
                 children += [cards.sep(),
@@ -465,6 +503,7 @@ class AzoraHubView(SafeLayoutView):
             await self._show(interaction, f"العمل **{name}** لم يعد موجودًا — أعد المحاولة.")
             return
         self.pending_link_work = work
+        self.link_work_page = self.page  # حفظ موضع المستخدم في قائمة الأعمال
         self.mode = "link_pick_azora"
         self.page = 0
         await self._show(interaction)
@@ -472,30 +511,47 @@ class AzoraHubView(SafeLayoutView):
     async def _link_pick_azora_children(self) -> list:
         cache = await store.load_cache()
         works = await load_works()
-        linked_slugs = {(w.get("azora") or {}).get("slug") for w in works if w.get("azora")}
-        bot_name = (self.pending_link_work or {}).get("name", "")
+        bot_work = self.pending_link_work or {}
+        bot_name = bot_work.get("name", "")
+        current_slug = str((bot_work.get("azora") or {}).get("slug") or "")
+        linked_by_others = {(w.get("azora") or {}).get("slug")
+                            for w in works
+                            if w.get("azora") and w.get("name") != bot_name}
         candidates = []
         for slug, entry in cache["works"].items():
             rank = self._suggest_rank(bot_name, entry.get("title_en", ""))
             candidates.append((rank, slug, entry))
         candidates.sort(key=lambda t: (t[0], str(t[2].get("title_en", "")).lower()))
         page_items, total_pages = _page_of(candidates, self.page, 25)
+        self.page = min(max(0, self.page), total_pages - 1)
         children = [
             cards.header(["## ربط عمل بأزورا",
                           f"الخطوة 2 من 2 — عمل أزورا المقابل لـ **{bot_name}**."],
                          _bot_avatar()),
             cards.sep(2),
-            cards.text("الاقتراحات تظهر أولًا (★ مطابقة، ☆ قريب) — والأعمال المرتبطة "
-                       "بأعمال أخرى محجوبة من القائمة."),
-            cards.sep(),
         ]
+        if current_slug:
+            children.append(cards.text(
+                f"**تحديث ربط:** هذا العمل مرتبط حاليًا بـ `{current_slug}` — اختيار عمل "
+                "آخر يستبدل الرابط بعد التأكيد، وسجلات العمل لا تُمسّ بشيء."))
+        children.append(cards.text(
+            "الاقتراحات تظهر أولًا (★ مطابقة، ☆ قريب) — والرابط الحالي بوسم (الحالي)، "
+            "وما هو مرتبط بأعمال أخرى بوسم (مرتبط) ولا يُقبل اختياره."))
+        if self.notice:
+            children += [cards.sep(), cards.text(cards.clamp(self.notice, 1000))]
+        children.append(cards.sep())
         if not page_items:
             children.append(cards.text("لا توجد أعمال متاحة في هذه الصفحة."))
         else:
             star = {0: "★ ", 1: "☆ "}
             options = []
             for rank, slug, entry in page_items:
-                taken = " (مرتبط)" if slug in linked_slugs else ""
+                if slug == current_slug:
+                    taken = " (الحالي)"
+                elif slug in linked_by_others:
+                    taken = " (مرتبط)"
+                else:
+                    taken = ""
                 options.append(discord.SelectOption(
                     label=cards.clamp(f"{star.get(rank, '')}{entry.get('title_en', slug)}{taken}", 100),
                     value=slug))
@@ -511,11 +567,22 @@ class AzoraHubView(SafeLayoutView):
 
     async def _link_back_to_pick(self, interaction: discord.Interaction):
         self.mode = "link_pick_work"
-        self.page = 0
+        self.page = getattr(self, "link_work_page", 0)  # استعادة موضع المستخدم
         await self._show(interaction)
 
     async def _link_azora_picked(self, interaction: discord.Interaction):
-        self.pending_link_slug = interaction.data["values"][0]
+        slug = interaction.data["values"][0]
+        works = await load_works()
+        bot_name = (self.pending_link_work or {}).get("name", "")
+        other = next((w for w in works
+                      if w.get("name") != bot_name and (w.get("azora") or {}).get("slug") == slug), None)
+        if other:
+            await self._show(interaction,
+                             f"عمل أزورا `{slug}` مرتبط أصلًا بعمل **{other.get('name')}** — "
+                             "اختر عملًا آخر، أو افصل ربطه أولًا من زر «فك ربط».")
+            return
+        self.pending_link_slug = slug
+        self.azora_page = self.page  # حفظ موضع المستخدم في قائمة أزورا
         self.mode = "link_confirm"
         await self._show(interaction)
 
@@ -524,6 +591,11 @@ class AzoraHubView(SafeLayoutView):
         entry = cache["works"].get(self.pending_link_slug or "") or {}
         work = self.pending_link_work or {}
         cover = entry.get("cover") or ""
+        current_slug = str((work.get("azora") or {}).get("slug") or "")
+        replace_note = ""
+        if current_slug and current_slug != (self.pending_link_slug or ""):
+            replace_note = (f"\n**تحديث ربط:** الرابط الحالي `{current_slug}` "
+                            "سيُستبدل بهذا الاختيار عند التأكيد.")
         children: list = []
         head = ["## تأكيد الربط", f"**{work.get('name')}**"]
         children.append(cards.header(head, cover if cover else _bot_avatar()))
@@ -534,6 +606,7 @@ class AzoraHubView(SafeLayoutView):
                 f"**العمل على أزورا:** {entry.get('title_en', self.pending_link_slug)}\n"
                 f"**الرابط:** {client.AZORA_BASE}/series/{self.pending_link_slug}\n"
                 f"**عدد الفصول الحالي على أزورا:** {entry.get('chapter_count', '—')}"
+                f"{replace_note}"
             ),
             cards.sep(),
             cards.text("بعد الربط: التسجيل في هذا العمل يقتصر على الفصول **المنشورة فعليًا** "
@@ -552,7 +625,7 @@ class AzoraHubView(SafeLayoutView):
 
     async def _link_back_to_azora(self, interaction: discord.Interaction):
         self.mode = "link_pick_azora"
-        self.page = 0
+        self.page = getattr(self, "azora_page", 0)  # استعادة موضع المستخدم
         await self._show(interaction)
 
     async def _link_commit(self, interaction: discord.Interaction):
@@ -567,13 +640,15 @@ class AzoraHubView(SafeLayoutView):
                 "تعذر الربط", ["العمل لم يعد موجودًا في القائمة."], avatar_url=_bot_avatar()))
             return
         slug = self.pending_link_slug
-        other = next((w for w in works if (w.get("azora") or {}).get("slug") == slug), None)
+        other = next((w for w in works
+                      if w.get("name") != work.get("name") and (w.get("azora") or {}).get("slug") == slug), None)
         if other:
             await interaction.message.edit(view=cards.error_card(
                 "تعذر الربط",
                 [f"عمل أزورا `{slug}` مرتبط أصلًا بعمل آخر: **{other.get('name')}**.",
                  "افصل ربطه أولًا إن أردت إعادة الربط."], avatar_url=_bot_avatar()))
             return
+        old_slug = str((work.get("azora") or {}).get("slug") or "")
         cache = await store.load_cache()
         entry = cache["works"].get(slug) or {}
         note = await _link_work(work, slug, entry,
@@ -586,8 +661,11 @@ class AzoraHubView(SafeLayoutView):
                 avatar_url=_bot_avatar()))
             return
         self.mode = "hub"
-        await self._show_after_defer(interaction,
-                                     f"ارتبط **{work.get('name')}** بـ `{slug}` بنجاح.\n{note}")
+        if old_slug and old_slug != slug:
+            headline = f"تم تحديث ربط **{work.get('name')}**: من `{old_slug}` إلى `{slug}`."
+        else:
+            headline = f"ارتبط **{work.get('name')}** بـ `{slug}` بنجاح."
+        await self._show_after_defer(interaction, f"{headline}\n{note}")
 
     # ══════════════════════════════════════════════════════════
     # 4) ربط تلقائي بالأسماء
