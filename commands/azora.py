@@ -427,10 +427,12 @@ class AzoraHubView(SafeLayoutView):
         works = await load_works()
         cache = await store.load_cache()
 
-        # ترتيب مستقر ومحدد تمامًا: الاقتراحات الذكية تتصدر (★ ثم ☆) ثم بقية
-        # غير المرتبطة ثم المرتبطة بوسم ✓ — وداخل كل مجموعة يبقى ترتيب قاعدة
-        # البيانات الأصلي كما هو، فلا يقفز أي عمل بين الصفحات مهما تغيّر كاش
-        # أزورا أو أُضيف عمل جديد — نفس اكتمال قائمة /الأعمال.
+        # كل أعمال البوت تُعرض هنا بلا أي تصفية أو إخفاء (المرتبطة وغير المرتبطة)،
+        # والترتيب = ترتيب قاعدة البيانات الأصلي حرفيًا (نفس مصدر /الأعمال) دون
+        # أي إعادة ترتيب تعتمد على كاش أزورا المتغير — فلا يختفي أي عمل أبدًا
+        # ولا يقفز بين الصفحات، وعند إضافة عمل جديد يظهر آخر القائمة دون إزاحة.
+        # المرتبطة بوسم ✓ واختيارها يفتح تحديث ربطها بدل تكرار الربط.
+
         def rank_of(w):
             best = 2
             for _slug, entry in cache["works"].items():
@@ -439,11 +441,7 @@ class AzoraHubView(SafeLayoutView):
                     break
             return best
 
-        grouped = sorted(
-            ((rank_of(w), idx, w) for idx, w in enumerate(works)),
-            key=lambda t: (3 if t[2].get("azora") else t[0], t[1]),
-        )
-        page_tuples, total_pages = _page_of(grouped, self.page, 25)
+        page_items, total_pages = _page_of(works, self.page, 25)
         self.page = min(max(0, self.page), total_pages - 1)
 
         linked_count = sum(1 for w in works if w.get("azora"))
@@ -451,10 +449,9 @@ class AzoraHubView(SafeLayoutView):
                                   "الخطوة 1 من 2 — اختر عمل البوت."],
                                  _bot_avatar()), cards.sep(2)]
         children.append(cards.text(
-            f"**كل أعمال البوت معروضة هنا** — {len(works)} عمل: "
-            f"غير مرتبط {len(works) - linked_count} • مرتبط {linked_count}.\n"
-            "الاقتراحات تتصدر القائمة (★ مطابقة، ☆ قريب)، والأعمال المرتبطة بوسم ✓ "
-            "آخر القائمة — اختيار عمل مرتبط يفتح **تحديث ربطه** بدل تكرار الربط."))
+            f"**كل أعمال البوت معروضة هنا بلا أي إخفاء** — {len(works)} عمل: "
+            f"غير مرتبط {len(works) - linked_count} • مرتبط {linked_count} (بوسم ✓).\n"
+            "الترتيب ثابت مثل /الأعمال — إضافة عمل جديد تظهر آخر القائمة ولا تُزيح شيئًا."))
         if self.notice:
             children += [cards.sep(), cards.text(cards.clamp(self.notice, 1000))]
         children.append(cards.sep())
@@ -469,9 +466,10 @@ class AzoraHubView(SafeLayoutView):
         else:
             hints = {0: "مطابقة تامة على أزورا — جاهز للربط الفوري",
                      1: "اسم قريب من عمل على أزورا",
-                     2: "غير مرتبط بعد"}
+                     2: "بلا اقتراح مباشر — اختر المقابل يدويًا في الخطوة 2"}
+            star = {0: "★ ", 1: "☆ "}
             options = []
-            for rank, _idx, w in page_tuples:
+            for w in page_items:
                 name = w.get("name", "")
                 if w.get("azora"):
                     cur_slug = str((w.get("azora") or {}).get("slug") or "")
@@ -481,8 +479,9 @@ class AzoraHubView(SafeLayoutView):
                         description=cards.clamp(f"مرتبط: {cur_slug} — الاختيار يحدّث الرابط", 100),
                         emoji="📖"))
                 else:
+                    rank = rank_of(w)
                     options.append(discord.SelectOption(
-                        label=cards.clamp({0: "★ ", 1: "☆ "}.get(rank, "") + name, 100),
+                        label=cards.clamp(star.get(rank, "") + name, 100),
                         value=name,
                         description=cards.clamp(hints.get(rank, hints[2]), 100),
                         emoji="📖"))
