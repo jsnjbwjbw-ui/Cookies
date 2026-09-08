@@ -5,13 +5,14 @@ from discord import ui
 from state import bot
 from helpers.core import *
 from ui import cards
+from helpers.safe_view import SafeLayoutView
 
 
 # ═══════════════════════════════════════════════════════════════
 # 🔧 أساس مشترك: LayoutView ديناميكي يبني حاوية Cookies Tracker
 #   من جديد عند كل تغيير صفحة — نفس سلوك تحرير البطاقة الواحدة.
 # ═══════════════════════════════════════════════════════════════
-class DynamicCardView(ui.LayoutView):
+class DynamicCardView(SafeLayoutView):
     ACCENT = cards.ACCENT_GOLD
     TITLE = "بطاقة"
     INTRO = ""

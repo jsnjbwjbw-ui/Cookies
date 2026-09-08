@@ -17,6 +17,7 @@ from helpers.core import (
     parse_chapter_range, is_duplicate, get_specialty_price,
     update_stats, upsert_member, get_active_month_key,
 )
+from azora.gating import registration_blockers, get_azora_link, unpublished_chapters, normalize_chapter
 from ui import cards
 
 # جلسات التسجيل النشطة: key=(guild_id, user_id, channel_id) -> WizardSession
@@ -188,6 +189,16 @@ class WizardSession:
         user_id = str(self.member.id)
         records.setdefault(user_id, [])
 
+        # ── بوابة أزورا النهائية: منشور + لا تكرار فصل+تخصص ──
+        blockers = await registration_blockers(
+            self.work, self.paid_chapters, self.types, records, self.member.id)
+        if blockers:
+            self.touch()
+            await interaction.response.edit_message(
+                view=cards.Card(cards.ACCENT_GOLD, *await self._confirm_children(
+                    "**مرفوض — بوابة أزورا:**\n" + "\n".join(blockers[:8]))))
+            return
+
         added_chapters = []
         added_types = []
         duplicates = 0
@@ -310,6 +321,18 @@ class WizardSession:
     async def _chapters_children(self) -> list:
         ps = self.work.get("paid_start")
         policy = "كل الفصول مدفوعة" if ps is None else f"الدفع يبدأ من فصل {ps} (الأقدم مجاني)"
+        azora_note = ""
+        if get_azora_link(self.work):
+            link = get_azora_link(self.work)
+            from azora import store as _az_store
+            cached = await _az_store.get_cached_chapters(link["slug"])
+            if cached and cached.get("numbers"):
+                latest = max(cached["numbers"], key=normalize_chapter)
+                azora_note = (f"\n**هذا العمل مرتبط بأزورا** — يُسمح بالفصول المنشورة فقط، "
+                              f"وآخر فصل منشور حاليًا: **{latest}**.")
+            else:
+                azora_note = ("\n**هذا العمل مرتبط بأزورا** — يُسمح بالفصول المنشورة فقط، "
+                              "وكتاش الفصول يُحدّث بالمزامنة الآن.")
         children = [
             cards.header(["## تسجيل تفاعلي", f"العمل: **{self.work['name']}**"],
                          _member_avatar(self.member)),
@@ -319,6 +342,7 @@ class WizardSession:
                 f"أرسل نطاق الفصول في هذه القناة الآن.\n"
                 f"**الأمثلة:** `5` أو `1-5` أو `1,3,7`\n"
                 f"**سياسة الدفع هنا:** {policy}"
+                f"{azora_note}"
             ),
             cards.sep(),
             cards.row(cards.secondary_btn("إلغاء", self.cancel)),
@@ -467,6 +491,18 @@ async def _wizard_listener(message: discord.Message):
                  "الجلسة مستمرة — أرسل نطاقًا يحتوي فصولًا مدفوعة."],
                 avatar_url=_bot_avatar()))
             return
+        # ── بوابة أزورا: الفصل المنشور فقط (للأعمال المرتبطة) ──
+        if get_azora_link(session.work):
+            missing = await unpublished_chapters(session.work, paid)
+            if missing:
+                shown = "، ".join(f"فصل {m}" for m in missing[:10])
+                await session.message.edit(view=cards.error_card(
+                    "الفصل لم يُنشر بعد على أزورا",
+                    [f"هذه الفصول غير موجودة بعد على صفحة العمل في أزورا: **{shown}**.",
+                     "التسجيل عليها يُفتح تلقائيًا فور رفعها — تابع قناة الإعلانات.",
+                     "الجلسة مستمرة — أرسل نطاقًا يحتوي فصولًا منشورة فقط."],
+                    avatar_url=_bot_avatar()))
+                return
         session.chapters_list = chapters
         session.paid_chapters = paid
         session.free_count = free

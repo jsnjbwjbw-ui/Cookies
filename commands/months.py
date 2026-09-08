@@ -17,6 +17,7 @@ from helpers.core import (
     get_isolated_work_names,
 )
 from ui import cards
+from helpers.safe_view import SafeLayoutView
 
 MONTH_SELECT_EMOJI = "🗓️"   # إيموجي القوائم المنسدلة فقط
 
@@ -53,7 +54,7 @@ def _next_month_key(after_key: str) -> str:
 # ═══════════════════════════════════════════════════════════════
 # لوحة إدارة الشهور
 # ═══════════════════════════════════════════════════════════════
-class MonthsHubView(ui.LayoutView):
+class MonthsHubView(SafeLayoutView):
     def __init__(self, guild: discord.Guild, user, notice: str | None = None, back=None):
         super().__init__(timeout=900.0)
         self.guild = guild
@@ -315,7 +316,7 @@ async def months_collection_update_name(month_key: str, name: str, user_id):
 # ═══════════════════════════════════════════════════════════════
 # حذف شهر — بطاقة تأكيد
 # ═══════════════════════════════════════════════════════════════
-class MonthDeleteSelectView(ui.LayoutView):
+class MonthDeleteSelectView(SafeLayoutView):
     """قائمة اختيار شهر للحذف (الحالي مستثنى دائمًا)."""
 
     def __init__(self, guild, user, back=None):

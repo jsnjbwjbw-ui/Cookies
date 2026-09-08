@@ -15,6 +15,7 @@ from helpers.core import (
     get_active_month_key, DatabaseUnavailableError,
 )
 from ui import cards
+from helpers.safe_view import SafeLayoutView
 
 
 def _bot_avatar() -> str | None:
@@ -51,7 +52,7 @@ async def specialty_usage_counts() -> tuple[dict, dict]:
 # ═══════════════════════════════════════════════════════════════
 # لوحة التخصصات الرئيسية
 # ═══════════════════════════════════════════════════════════════
-class SpecialtiesHubView(ui.LayoutView):
+class SpecialtiesHubView(SafeLayoutView):
     def __init__(self, back=None):
         super().__init__(timeout=900.0)
         self.back = back
@@ -240,7 +241,7 @@ class SpecialtiesHubView(ui.LayoutView):
         await interaction.response.edit_message(view=view)
 
 
-class SpecialtyDetailView(ui.LayoutView):
+class SpecialtyDetailView(SafeLayoutView):
     """بطاقة تخصص واحد: السعر، الحالة، الاستخدام الكلي وفي الشهر الحالي،
     وزر تفعيل/تعطيل ينفّذ فورًا + رجوع إلى المركز."""
 

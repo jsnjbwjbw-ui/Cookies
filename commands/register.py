@@ -90,8 +90,11 @@ async def validate_registration(
     work_name: str,
     chapters_input: str,
     types_input: str,
+    target_user_id: int | None = None,
 ) -> tuple:
-    """يرجع (work, chapters_list, paid_chapters, free_count, filtered_types) أو (None,...,error_card)."""
+    """يرجع (work, chapters_list, paid_chapters, free_count, filtered_types) أو (None,...,error_card).
+    target_user_id = صاحب التسجيل الفعلي (في /تسجيل_للغير هو العضو الهدف) —
+    يُستخدم لاستثناء صاحب الطلب من فحص التعارض."""
     avatar_url = interaction.client.user.display_avatar.url if interaction.client.user else None
 
     work = await get_work(work_name)
@@ -157,6 +160,17 @@ async def validate_registration(
                     "تعذر بدء التسجيل",
                     [f"التخصص `{t}` غير صحيح. التخصصات المتاحة: {', '.join(PRICES.keys())}"],
                     avatar_url=avatar_url)
+
+    # ── بوابة أزورا: فصل منشور فقط + لا تكرار فصل+تخصص (للمرتبطة فقط) ──
+    from azora.gating import registration_blockers, get_azora_link
+    if get_azora_link(work):
+        records = await load_records()
+        blockers = await registration_blockers(
+            work, paid_chapters, filtered_types, records,
+            target_user_id or interaction.user.id)
+        if blockers:
+            return None, None, None, 0, None, cards.error_card(
+                "التسجيل مرفوض — بوابة أزورا", blockers, avatar_url=avatar_url)
 
     return work, chapters_list, paid_chapters, free_count, filtered_types, None
 
@@ -299,7 +313,7 @@ async def register_for_member(
         return
 
     work, chapters_list, paid_chapters, free_count, filtered_types, error_card = await validate_registration(
-        interaction, العمل, الفصول, التخصصات)
+        interaction, العمل, الفصول, التخصصات, target_user_id=عضو.id)
     if error_card is not None:
         await interaction.response.send_message(view=error_card, ephemeral=True)
         return

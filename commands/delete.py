@@ -5,6 +5,7 @@ from discord import ui
 from state import bot
 from helpers.core import *
 from ui import cards
+from helpers.safe_view import SafeLayoutView
 
 
 def _bot_avatar(interaction_or_bot):
@@ -71,7 +72,7 @@ async def finish_card(interaction: discord.Interaction, title: str, lines: list,
 # ═══════════════════════════════════════════════════════════════
 # 🗑️ لوحة خيارات الحذف — قائمة منسدلة داخل حاوية ذهبية
 # ═══════════════════════════════════════════════════════════════
-class DeletePanel(ui.LayoutView):
+class DeletePanel(SafeLayoutView):
     def __init__(self, moderator: discord.abc.User, member: discord.Member, work_name=None):
         super().__init__(timeout=120.0)
         self.moderator = moderator
@@ -181,7 +182,7 @@ class DeletePanel(ui.LayoutView):
             await interaction.response.edit_message(view=view)
 
 
-class ChapterDeletePanel(ui.LayoutView):
+class ChapterDeletePanel(SafeLayoutView):
     def __init__(self, moderator, member, work_name, options):
         super().__init__(timeout=120.0)
         self.moderator = moderator
@@ -272,7 +273,7 @@ async def delete_advanced(interaction: discord.Interaction, member: discord.Memb
         await interaction.response.send_message(view=view)
 
 
-class WorkPickPanel(ui.LayoutView):
+class WorkPickPanel(SafeLayoutView):
     def __init__(self, moderator, member, options, works):
         super().__init__(timeout=120.0)
         self.moderator = moderator

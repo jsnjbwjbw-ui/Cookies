@@ -13,6 +13,8 @@ from typing import Awaitable, Callable, Iterable, Optional, Union
 import discord
 from discord import ui
 
+from helpers.safe_view import SafeLayoutView
+
 # ── الألوان الأربعة (نفس ألوان بوت السحب بالضبط) ──
 ACCENT_GOLD = 0xd4af37    # الذهبي — الانتظار / المعلومات / البطاقات العامة
 ACCENT_GREEN = 0x57f287   # الأخضر — النجاح / الاكتمال / الحفظ
@@ -96,7 +98,7 @@ def container(accent: int, *children) -> ui.Container:
     return ui.Container(*children, accent_color=accent)
 
 
-class Card(ui.LayoutView):
+class Card(SafeLayoutView):
     """بطاقة Components V2: حاوية واحدة بلون accent كما في بوت السحب.
     مثال: Card(ACCENT_GOLD, header(["## 📖 Cookies Tracker"], url), sep(2), text("نص"))"""
 

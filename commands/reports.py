@@ -10,6 +10,7 @@ from views.paginators import WorksPaginator, get_works_info
 from tasks.lifecycle import specialty_autocomplete
 from ui import cards
 from commands.admin import PaymentReportPaginator, build_payment_rows
+from helpers.safe_view import SafeLayoutView
 
 
 def _bot_avatar():
@@ -61,7 +62,7 @@ class BackNav:
 # 🎨 ملخص شغل عضو — بطاقة حية بقائمة أعمال منسدلة + تفاصيل
 #   الصورة المصغرة دائمًا لصورة العضو المعنيّ وليس صورة البوت.
 # ═══════════════════════════════════════════════════════════════
-class WorkSummarySelectView(ui.LayoutView):
+class WorkSummarySelectView(SafeLayoutView):
     def __init__(self, works, bonuses, deductions, member, user_id,
                  currency, title_prefix="ملخص شغل"):
         super().__init__(timeout=600.0)
@@ -272,7 +273,7 @@ def get_top_members_dict(stat_doc):
 #   ملاحظة حرجة: لا يُسمح بتسمية أي دالة أو خاصية `_children`
 #   لأن discord.py يستخدم هذا الاسم داخليًا (كان سبب تعطل /توب).
 # ═══════════════════════════════════════════════════════════════
-class TopView(BackNav, ui.LayoutView):
+class TopView(BackNav, SafeLayoutView):
     def __init__(self, stat_doc, guild: discord.Guild, currency, back=None):
         super().__init__(timeout=600.0)
         self.stat_doc = stat_doc or {}
@@ -407,7 +408,7 @@ class TopView(BackNav, ui.LayoutView):
 # ═══════════════════════════════════════════════════════════════
 # 👤 تفاصيل عضو دقيقة — تُفتح من قائمة /الأعضاء
 # ═══════════════════════════════════════════════════════════════
-class MemberDetailView(BackNav, ui.LayoutView):
+class MemberDetailView(BackNav, SafeLayoutView):
     """البطاقة الدقيقة الكاملة لعضو واحد: إجماليات، تفصيل أعمال بأشرطة،
     تفصيل تخصصات، آخر السجلات — وصورة العضو في الرأس."""
 
@@ -513,7 +514,7 @@ class MemberDetailView(BackNav, ui.LayoutView):
 # 👥 /الأعضاء — القائمة المريحة: سطر واحد لكل عضو + اختيار عضو
 #   من القائمة المنسدلة يفتح تفاصيله الدقيقة.
 # ═══════════════════════════════════════════════════════════════
-class MembersHubView(BackNav, ui.LayoutView):
+class MembersHubView(BackNav, SafeLayoutView):
     def __init__(self, rows, guild, currency, title="الأعضاء والمستحقات",
                  back=None, per_page=8, focus_specialty=None):
         super().__init__(timeout=600.0)
@@ -639,7 +640,7 @@ class SpecialtyMembersView(MembersHubView):
 # ═══════════════════════════════════════════════════════════════
 # 📊 عارض الإحصائيات التفاعلي — أزرار الأقسام
 # ═══════════════════════════════════════════════════════════════
-class StatsView(ui.LayoutView):
+class StatsView(SafeLayoutView):
     def __init__(self, stat_doc, bot_member, currency, guild: discord.Guild, back=None):
         super().__init__(timeout=600.0)
         self.stat_doc = stat_doc
@@ -773,7 +774,7 @@ class StatsView(ui.LayoutView):
 # ═══════════════════════════════════════════════════════════════
 # 🛠️ اختيار التخصص من لوحة التحكم
 # ═══════════════════════════════════════════════════════════════
-class SpecialtyPickView(BackNav, ui.LayoutView):
+class SpecialtyPickView(BackNav, SafeLayoutView):
     def __init__(self, guild: discord.Guild, back=None):
         super().__init__(timeout=600.0)
         self.guild = guild
@@ -830,7 +831,7 @@ class SpecialtyPickView(BackNav, ui.LayoutView):
 # ═══════════════════════════════════════════════════════════════
 # 🖥️ لوحة التحكم — كل زر ينفّذ أمره مباشرة في مكان اللوحة
 # ═══════════════════════════════════════════════════════════════
-class DashboardView(ui.LayoutView):
+class DashboardView(SafeLayoutView):
     def __init__(self, guild: discord.Guild, user):
         super().__init__(timeout=900.0)
         self.guild = guild
@@ -905,6 +906,20 @@ class DashboardView(ui.LayoutView):
     async def _open_months(self):
         from commands.months import MonthsHubView
         return await MonthsHubView.create(self.guild, self.user, back=self._as_back)
+
+    async def _open_azora(self):
+        member = self.guild.get_member(self.user.id) if self.guild else None
+        allowed = False
+        if member is not None:
+            perms = getattr(member, "guild_permissions", None)
+            allowed = bool(perms and (perms.administrator or perms.manage_messages))
+        if not allowed:
+            return cards.info_card(
+                "لوحة أزورا للمشرفين",
+                ["إدارة ربط أعمال الفريق بأزورا متاحة للمشرفين فقط."],
+                avatar_url=_bot_avatar())
+        from commands.azora import AzoraHubView
+        return await AzoraHubView.create(self.guild, self.user, back=self._as_back)
 
     async def _open_monthly(self):
         active_key = get_active_month_key()
@@ -983,6 +998,7 @@ class DashboardView(ui.LayoutView):
             ),
             cards.row(
                 cards.secondary_btn("ملخص شهري", self._swap(self._open_monthly)),
+                cards.secondary_btn("أزورا", self._swap(self._open_azora)),
             ),
             cards.sep(),
             cards.text(f"-# {cards.BOT_SIGNATURE}"),

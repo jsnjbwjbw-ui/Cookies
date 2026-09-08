@@ -174,7 +174,9 @@ async def on_ready():
         print(f"[WARNING] Could not set presence: {e}")
 
     # ── بوابة قاعدة البيانات: لا إقلاع كامل قبل اتصال حقيقي ──
-    await wait_for_database(max_attempts=8, delay=3.0)
+    db_up = await wait_for_database(max_attempts=8, delay=3.0)
+    if not db_up:
+        print("[HINT] راجع: Network Access في Atlas (0.0.0.0/0) + صحة MONGODB_URI + MONGODB_DB_NAME.")
 
     loaded_settings = await load_settings()
     SETTINGS.clear()
@@ -196,8 +198,11 @@ async def on_ready():
     except Exception as e:
         print(f"[ERROR] migrate_data failed: {e}")
 
-    await bot.tree.sync()
-    print("[LOG] Slash commands synced")
+    try:
+        await bot.tree.sync()
+        print("[LOG] Slash commands synced")
+    except Exception as e:
+        print(f"[ERROR] tree.sync failed (سيعيد المحاولة عند الإقلاع التالي): {e}")
     try:
         await update_stats()
     except Exception as e:
@@ -205,6 +210,13 @@ async def on_ready():
     daily_backup.start()
     update_stats_task.start()
     payment_reminder_task.start()
+
+    # ── حلقة مزامنة أزورا (اكتشاف الأعمال + إعلان الفصول + تحديث الكاش) ──
+    try:
+        from azora.sync import start_sync_loop
+        await start_sync_loop()
+    except Exception as e:
+        print(f"[ERROR] azora sync loop start failed: {e}")
 
 
 @bot.check

@@ -9,6 +9,7 @@ from state import bot
 from helpers.core import *
 from tasks.lifecycle import work_autocomplete, specialty_autocomplete
 from ui import cards
+from helpers.safe_view import SafeLayoutView
 
 
 def _bot_avatar():
@@ -836,7 +837,7 @@ async def delete_bonus_deduction(interaction: discord.Interaction, عضو: disco
     await interaction.response.send_message(view=view)
 
 
-class BonusDeletePanel(ui.LayoutView):
+class BonusDeletePanel(SafeLayoutView):
     def __init__(self, moderator, member, recent, options):
         super().__init__(timeout=120.0)
         self.moderator = moderator
@@ -931,7 +932,7 @@ async def set_payment_day(interaction: discord.Interaction, اليوم: int, ا�
     await log_audit("تحديد_موعد_الدفع", interaction.user.id, None, f"يوم {اليوم} ساعة {الساعة}")
 
 
-class PaymentReportPaginator(ui.LayoutView):
+class PaymentReportPaginator(SafeLayoutView):
     def __init__(self, rows, details, guild, currency, back=None):
         super().__init__(timeout=600.0)
         self.rows = rows

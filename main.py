@@ -10,6 +10,8 @@ import commands.delete
 import commands.months
 import commands.specialties
 import commands.prefix_register
+import commands.azora
+import commands.diagnostics
 import views.paginators
 import commands.reports
 import commands.admin
