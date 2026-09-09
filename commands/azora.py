@@ -1098,8 +1098,7 @@ class AzoraHubView(SafeLayoutView):
                 "تعذر جلب فصول هذا العمل من أزورا الآن — جرّب مرة أخرى بعد قليل.",
                 ephemeral=True)
             return
-        await interaction.followup.send(
-            embed=discord.Embed().set_image(url=ANNOUNCE_GIF_URL), ephemeral=True)
+        await interaction.followup.send(ANNOUNCE_GIF_URL, ephemeral=True)
         await interaction.followup.send(
             view=build_announcement_card(work, chapter, ""), ephemeral=True)
 

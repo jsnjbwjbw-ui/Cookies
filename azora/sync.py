@@ -91,7 +91,7 @@ def build_announcement_card(work: dict, chapter: dict, uploader: str) -> cards.C
             cards.link_btn("صفحة العمل", work_link),
         ),
         cards.sep(),
-        cards.text("سجّل فصولك المنجزة عبر /تسجيل بعد اكتمال رفع الفصل."),
+        cards.text("الفصل نزل — يمكنك تسجيل فصلك الآن عبر /تسجيل."),
         cards.sep(),
         cards.text(f"-# {cards.BOT_SIGNATURE}"),
     ]
