@@ -34,6 +34,7 @@ DEFAULT_STATE = {
     "listing_v2": False,
     "last_sync_at": None,
     "last_sync_ok": None,
+    "last_ok_sync_at": None,
     "last_error": None,
     "last_error_at": None,
     "announced_count": 0,

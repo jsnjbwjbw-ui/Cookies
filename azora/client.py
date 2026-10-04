@@ -1,34 +1,30 @@
 # ═══════════════════════════════════════════════════════════════
-# 🌐 عميل أزورا — عقد الـAPI الموثّق من مصدرين حقيقيين:
+# 🌐 عميل أزورا — عقد الـAPI الحالي بعد تحديث واجهة الموقع:
 #
-#   أ) سورس إضافة أزورا الرسمية (keiyoushi/extensions-source → قالب
-#      Iken) التي تعمل على azorafly.com منذ سنوات.
-#   ب) الالتقاط الحي لردود موقع أزورا نفسه (SSR + JS الواجهة).
+#   الموقع azorafly.com أصبح Next.js/React (بدل Astro)، والمصدر
+#   المرجعي هو سورس إضافة أزورا الرسمية (keiyoushi/extensions-source
+#   ← قالب Iken 1.6) المحدّث للواجهة الجديدة.
 #
-#   المصادر الثلاثة للبيانات:
-#
-#   1) أعمال الفريق (كلها بترقيم رسمي):
+#   1) أعمال الفريق (كلها بترقيم رسمي) — النداء نفسه شغال ومؤكد:
 #      GET {api}/api/teams/posts/{teamId}?page=N&perPage=24
 #      → {posts:[{id, slug, postTitle, featuredImage, updatedAt,
 #         _count:{chapters}}], totalCount, page, perPage, totalPages}
-#      هذا هو النداء نفسه الذي يستخدمه موقع أزورا لزر «تحميل المزيد»
-#      في صفحة الفريق — teamId يُستخرج من خصائص صفحة الفريق SSR.
 #
-#   2) صفحة الفريق (SSR): GET {base}/teams/{team_slug}
-#      صفحة Astro تضمّن astro-island props: team + teamId + stats +
-#      postsData (24 عملًا للصفحة الأولى فقط) + chaptersData
-#      (أحدث 20 فصلًا منشورًا للفريق مع العمل التابع له).
-#      ⚠️ صفحة الفريق **لا تدعم** ?page=N — ثبُت أن أي صفحة غير الأولى
-#      تعيد 404، لذلك القائمة الكاملة تأتي من النداء الرقمي أعلاه.
+#   2) معرف الفريق من السلاغ — قائمة الفرق الرسمية:
+#      GET {api}/api/teams?page=N&perPage=50
+#      → {teams:[{id, slug, name, avatarUrl, ...}], totalCount,
+#         totalPages}
 #
-#   3) فصول عمل واحد — نقطتان حسب عقد Iken الرسمي:
+#   3) صفحة الفريق SSR: GET {base}/teams/{slug}
+#      Next.js تعيد الاسم في <title> وأعمال الصفحة الأولى كروابط
+#      href="/series/{slug}" — تُستخدم تحققًا ومرجعًا احتياطيًا فقط.
+#
+#   4) فصول عمل واحد — عقد Iken الرسمي:
 #      GET {api}/api/post?postSlug={slug}
 #      → {totalChapterCount, post:{id, slug, ..., chapters?}}
-#      ⚠️ أزورا **لا تضمّن الفصول** في هذا الرد (chapters فارغ أو مقصوص)
-#      بينما totalChapterCount هو العدد الحقيقي — والإضافة الرسمية
-#      تتعامل مع ذلك بالتحويل تلقائيًا إلى:
-#      GET {api}/api/chapters?postId={post.id} → {post:{chapters:[...]}}
-#      نطبّق نفس المنطق حرفيًا.
+#      GET {api}/api/chapters?postId={post.id}
+#      → {post:{chapters:[...]}} — القائمة الكاملة (إضافة أزورا
+#      الرسمية تستخدم هذا المسار دائمًا عبر useChaptersApi).
 # ═══════════════════════════════════════════════════════════════
 from __future__ import annotations
 
@@ -49,6 +45,8 @@ DEFAULT_TEAM_SLUG = "cookies"
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=25, connect=10)
 MAX_TEAM_PAGES = 20            # سقف أمان (20 × 24 = حتى 480 عملًا)
 TEAM_POSTS_PER_PAGE = 24       # نفس قيمة الموقع الرسمي في واجهته
+TEAM_LIST_PER_PAGE = 50        # صفحة قائمة الفرق عند البحث عن معرف الفريق
+MAX_TEAM_LIST_PAGES = 10       # سقف صفحات قائمة الفرق (10 × 50 = 500 فريق)
 
 BROWSER_HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -137,79 +135,72 @@ async def _get_json(url: str) -> dict:
 
 
 # ───────────────────────────────────────────────────────────────
-# فك تسلسل Astro props: {"k": [0, قيمة]} (صيغة [نوع, بيانات])
+# صفحة الفريق SSR (Next.js) — الاسم من <title> والأعمال من الروابط
 # ───────────────────────────────────────────────────────────────
-def _unwrap_astro(value):
-    if isinstance(value, list) and len(value) == 2 and isinstance(value[0], int):
-        return _unwrap_astro(value[1])
-    if isinstance(value, dict):
-        return {k: _unwrap_astro(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_unwrap_astro(v) for v in value]
-    return value
-
-
-_ISLAND_RE = re.compile(r'astro-island[^>]*props="(.*?)"', re.S)
+_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.S | re.I)
+_SERIES_HREF_RE = re.compile(r'href="/series/([A-Za-z0-9_\-]+)"')
 
 
 def parse_team_page(page_html: str) -> dict:
-    """يستخرج بيانات الفريق من HTML صفحة /teams/{slug}:
-    {team, team_id, posts: [...], posts_meta: {...}, latest_chapters: [...]}"""
+    """يستخرج هوية الفريق وأعمال الصفحة الأولى من HTML صفحة /teams/{slug}:
+    {team:{name}, team_id: None, posts:[{slug, postTitle}], posts_meta, latest_chapters: []}"""
     if "Attention Required" in page_html or "cf-error" in page_html:
         raise AzoraBlockedError("صفحة الفريق محجوبة من كلاودفلير حاليًا.")
-    decoded_islands = [html_mod.unescape(m) for m in _ISLAND_RE.findall(page_html)]
-    for decoded in decoded_islands:
-        if "postsData" not in decoded:
-            continue
-        try:
-            raw = json.loads(decoded)
-        except Exception:
-            continue
-        data = _unwrap_astro(raw)
-        posts_data = data.get("postsData") or {}
-        chapters_data = data.get("chaptersData") or {}
-        team = data.get("team") or {}
-        return {
-            "team": team,
-            "team_id": data.get("teamId"),
-            "posts": posts_data.get("posts", []) or [],
-            "posts_meta": {
-                "page": posts_data.get("page", 1),
-                "perPage": posts_data.get("perPage", TEAM_POSTS_PER_PAGE),
-                "totalCount": posts_data.get("totalCount", 0),
-                "totalPages": posts_data.get("totalPages", 1),
-            },
-            "latest_chapters": chapters_data.get("chapters", []) or [],
-        }
-    raise AzoraUnavailableError("لم أجد بيانات الفريق داخل الصفحة — ربما تغيرت بنية موقع أزورا.")
+    m = _TITLE_RE.search(page_html)
+    title = html_mod.unescape(m.group(1)).strip() if m else ""
+    slugs = list(dict.fromkeys(_SERIES_HREF_RE.findall(page_html)))
+    if not title and not slugs:
+        raise AzoraUnavailableError("لم أتعرف على صفحة الفريق — ربما تغيرت بنية موقع أزورا.")
+    posts = [{"slug": s, "postTitle": s} for s in slugs]
+    return {
+        "team": {"name": title},
+        "team_id": None,
+        "posts": posts,
+        "posts_meta": {"page": 1, "perPage": len(posts),
+                       "totalCount": len(posts), "totalPages": 1},
+        "latest_chapters": [],
+    }
 
 
 @dataclass
 class TeamSnapshot:
-    """لقطة كاملة لأعمال الفريق:
-    posts من النداء الرقمي الرسمي (كل الصفحات) أو من SSR عند فشله."""
+    """لقطة أعمال الفريق: من النداء الرقمي الرسمي أو SSR احتياطًا."""
     team_id: Optional[int] = None
     team_name: str = ""
     team_avatar: str = ""
     posts: list = field(default_factory=list)            # كل أعمال الفريق
-    latest_chapters: list = field(default_factory=list)  # أحدث فصول منشورة (صفحة 1 SSR)
+    latest_chapters: list = field(default_factory=list)  # مهجور — الإعلانات من فصول الأعمال مباشرة
     pages_fetched: int = 0
-    posts_source: str = "ssr"                            # api | ssr
+    posts_source: str = "ssr"                            # api | ssr | ...
 
 
 # ───────────────────────────────────────────────────────────────
-# صفحة الفريق (SSR) — الفريق + الصفحة الأولى + تغذية أحدث الفصول
+# هوية الفريق — قائمة الفرق الرسمية
 # ───────────────────────────────────────────────────────────────
-async def fetch_team_page(team_slug: str, page: int = 1) -> dict:
-    """صفحة الفريق SSR — تُستخدم للتحقق من الفريق وللب البيانات الأولية.
-    ملاحظة موثقة: الموقع لا يدعم ?page=N (تعيد 404) — لا تستخدمها للترقيم."""
-    url = f"{AZORA_BASE}/teams/{team_slug}"
-    raw = await _get_text(url)
-    return parse_team_page(raw)
+async def resolve_team(team_slug: str) -> dict | None:
+    """يبحث الفريق بالسلاغ في /api/teams — يعيد {id, name, avatarUrl} أو None."""
+    slug = str(team_slug or "").strip()
+    if not slug:
+        return None
+    for page in range(1, MAX_TEAM_LIST_PAGES + 1):
+        data = await _get_json(
+            f"{AZORA_API}/api/teams?page={page}&perPage={TEAM_LIST_PER_PAGE}")
+        teams = data.get("teams") or []
+        for t in teams:
+            if not isinstance(t, dict):
+                continue
+            if str(t.get("slug") or "") == slug:
+                return {"id": t.get("id"), "name": str(t.get("name") or slug),
+                        "avatarUrl": t.get("avatarUrl") or ""}
+        total_pages = int(data.get("totalPages") or 1)
+        if page >= total_pages or not teams:
+            return None
+        await asyncio.sleep(0.8)
+    return None
 
 
 # ───────────────────────────────────────────────────────────────
-# أعمال الفريق — النداء الرسمي المُرقّم (نفس نداء «تحميل المزيد» بالموقع)
+# أعمال الفريق — النداء الرسمي المُرقّم
 # ───────────────────────────────────────────────────────────────
 async def fetch_team_posts_page(team_id: int, page: int = 1,
                                 per_page: int = TEAM_POSTS_PER_PAGE) -> dict:
@@ -258,40 +249,60 @@ async def fetch_all_team_posts(team_id: int) -> tuple[list, int]:
     return posts, pages
 
 
-async def fetch_team_snapshot(team_slug: str) -> TeamSnapshot:
-    """اللقطة الكاملة: الهوية من SSR + الأعمال من النداء الرقمي الرسمي،
-    وإن فشل النداء الرقمي نعود لعمال SSR للصفحة الأولى (قائمة جزئية)
-    مع تعليم المصدر حتى تظهر الملاحظة في لوحة أزورا."""
-    first = await fetch_team_page(team_slug, 1)
-    snap = TeamSnapshot(
-        team_id=first.get("team_id"),
-        team_name=str((first.get("team") or {}).get("name") or team_slug).upper(),
-        team_avatar=(first.get("team") or {}).get("avatarUrl") or "",
-        posts=list(first.get("posts") or []),
-        latest_chapters=list(first.get("latest_chapters") or []),
-        pages_fetched=1,
-        posts_source="ssr",
-    )
-    team_id = snap.team_id
+async def fetch_team_snapshot(team_slug: str, known_team_id: Optional[int] = None,
+                              known_team_name: str = "") -> TeamSnapshot:
+    """اللقطة الكاملة: معرف الفريق (المخزون ثم /api/teams) + الأعمال من
+    النداء الرقمي الرسمي، وعند الفشل أعمال الصفحة الأولى من SSR."""
+    snap = TeamSnapshot(team_id=known_team_id, team_name=known_team_name)
+    team_id = known_team_id
+    team_name = known_team_name
     if team_id is None:
-        return snap  # لا نعرف رقم الفريق — نكتفي بعمال الصفحة الأولى
-    try:
-        posts, pages = await fetch_all_team_posts(int(team_id))
-    except AzoraError as e:
-        # النداء الرقمي فشل كليًا — نعود للصفحة الأولى من SSR بدل التعطيل
-        snap.posts_source = f"ssr (فشل النداء الرقمي: {str(e)[:80]})"
-        return snap
-    snap.posts = posts
-    snap.pages_fetched = pages
-    snap.posts_source = "api"
+        try:
+            info = await resolve_team(team_slug)
+        except AzoraError:
+            info = None
+        if info and info.get("id") is not None:
+            team_id = int(info["id"])
+            snap.team_id = team_id
+            team_name = team_name or str(info.get("name") or "")
+            snap.team_avatar = str(info.get("avatarUrl") or "")
+    if team_name:
+        snap.team_name = team_name
+    if team_id is not None:
+        try:
+            posts, pages = await fetch_all_team_posts(int(team_id))
+            snap.posts = posts
+            snap.pages_fetched = pages
+            snap.posts_source = "api"
+            if not snap.team_name:
+                snap.team_name = str(team_slug).upper()
+            return snap
+        except AzoraError as e:
+            snap.posts_source = f"فشل النداء الرقمي: {str(e)[:80]}"
+    page_data = await fetch_team_page(team_slug)
+    if page_data.get("team_id") is not None and snap.team_id is None:
+        snap.team_id = page_data["team_id"]
+    if not snap.team_name:
+        snap.team_name = str((page_data.get("team") or {}).get("name")
+                             or str(team_slug).upper())
+    snap.posts = list(page_data.get("posts") or [])
+    snap.pages_fetched = 1
     return snap
 
 
+async def fetch_team_page(team_slug: str, page: int = 1) -> dict:
+    """صفحة الفريق SSR — تحقق هوية الفريق ومرجع احتياطي لأعمال الصفحة الأولى.
+    ملاحظة موثقة: الواجهة الجديدة لا تعيد معرف الفريق في HTML."""
+    url = f"{AZORA_BASE}/teams/{team_slug}"
+    raw = await _get_text(url)
+    return parse_team_page(raw)
+
+
 # ───────────────────────────────────────────────────────────────
-# فصول عمل واحد — عقد Iken الرسمي بخطوتيه
+# فصول عمل واحد — عقد Iken الرسمي
 # ───────────────────────────────────────────────────────────────
 def _parse_chapter_list(chapters: list) -> list[dict]:
-    """يوحّد شكل الفصول: [{number: str, slug, title, created_at, locked}]
+    """يوحّد شكل الفصول: [{id, number: str, slug, title, created_at, locked}]
     مرتبة تصاعديًا. قاعدة «المقفل» من سورس الإضافة الرسمي:
     isLocked أو isTimeLocked أو (سعر ≠ 0 وغير مشترى).
     الفصول المقفلة **منشورة** فعلًا (مجرد حجب دفع) — تدخل القائمة."""
@@ -305,6 +316,7 @@ def _parse_chapter_list(chapters: list) -> list[dict]:
         locked = bool(ch.get("isLocked") or ch.get("isTimeLocked")
                       or (ch.get("price") not in (None, 0) and not ch.get("chapterPurchased")))
         unified.append({
+            "id": ch.get("id"),
             "number": str(number),
             "slug": str(ch.get("slug") or ""),
             "title": str(ch.get("title") or ""),
@@ -323,6 +335,24 @@ def parse_work_chapters(payload: dict) -> list[dict]:
     (post بدون فصول + totalChapterCount في الأعلى)."""
     post = (payload or {}).get("post") or {}
     return _parse_chapter_list(post.get("chapters") or [])
+
+
+def _chapters_from_payload(payload: dict) -> list[dict]:
+    if not isinstance(payload, dict):
+        return []
+    post = payload.get("post")
+    if isinstance(post, dict) and isinstance(post.get("chapters"), list):
+        return _parse_chapter_list(post["chapters"])
+    if isinstance(payload.get("chapters"), list):
+        return _parse_chapter_list(payload["chapters"])
+    return []
+
+
+async def fetch_work_chapters_by_id(post_id: int) -> list[dict]:
+    """كل فصول عمل أزورا عبر /api/chapters?postId=… — المسار الذي تستخدمه
+    إضافة أزورا الرسمية دائمًا (useChaptersApi) للقائمة الكاملة."""
+    payload = await _get_json(f"{AZORA_API}/api/chapters?postId={int(post_id)}")
+    return _chapters_from_payload(payload)
 
 
 async def fetch_work_chapters(post_slug: str) -> list[dict]:
@@ -346,11 +376,9 @@ async def fetch_work_chapters(post_slug: str) -> list[dict]:
         (total is not None and len(chapters) < total)
         or (total is None and not chapters))
     if need_fallback:
-        full = await _get_json(f"{AZORA_API}/api/chapters?postId={int(post_id)}")
-        full_post = (full or {}).get("post") or {}
-        full_chapters = _parse_chapter_list(full_post.get("chapters") or [])
-        if len(full_chapters) > len(chapters):
-            chapters = full_chapters
+        full = await fetch_work_chapters_by_id(int(post_id))
+        if len(full) > len(chapters):
+            chapters = full
     return chapters
 
 
