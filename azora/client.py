@@ -301,6 +301,14 @@ async def fetch_team_page(team_slug: str, page: int = 1) -> dict:
 # ───────────────────────────────────────────────────────────────
 # فصول عمل واحد — عقد Iken الرسمي
 # ───────────────────────────────────────────────────────────────
+def _chapter_date(ch: dict) -> str:
+    for key in ("createdAt", "created_at", "publishedAt", "published_at"):
+        v = ch.get(key)
+        if v:
+            return str(v)
+    return ""
+
+
 def _parse_chapter_list(chapters: list) -> list[dict]:
     """يوحّد شكل الفصول: [{id, number: str, slug, title, created_at, locked}]
     مرتبة تصاعديًا. قاعدة «المقفل» من سورس الإضافة الرسمي:
@@ -320,7 +328,7 @@ def _parse_chapter_list(chapters: list) -> list[dict]:
             "number": str(number),
             "slug": str(ch.get("slug") or ""),
             "title": str(ch.get("title") or ""),
-            "created_at": str(ch.get("createdAt") or ""),
+            "created_at": _chapter_date(ch),
             "locked": locked,
         })
     try:

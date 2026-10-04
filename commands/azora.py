@@ -353,6 +353,7 @@ class AzoraHubView(SafeLayoutView):
             f"**أعمال الفريق المكتشفة:** {result.get('team_works', 0)}",
             f"**أعمال أُضيفت للبوت الآن:** {result.get('auto_added', 0)}",
             f"**فصول أُعلن عنها:** {result.get('announced', 0)}",
+            f"**فصول سُجلت بلا إعلان:** {result.get('silent_registered', 0)}",
             f"**كاش فصول مُحدَّث:** {result.get('refreshed', 0)}",
         ]
         if result.get("rebaseline") is not None:

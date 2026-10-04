@@ -5,7 +5,9 @@
 #   الوثائق:
 #     {_id: "state"}   → إعدادات النظام وحالة آخر مزامنة.
 #     {_id: "cache"}   → كاش أعمال الفريق (slug → بيانات) + معرفات
-#                        الفصول المعلَن عنها سابقًا (منع التكرار).
+#                        الفصول المعلَن عنها سابقًا (منع التكرار)
+#                        + أعلى رقم فصل مخزّن لكل عمل مرتبط
+#                        (top_numbers: أساس قرار "الفصل الجديد فقط").
 #     {_id: "chapters", data: {slug: {numbers, chapters, updated_at,
 #                        last_fetch, count}}} → أرقام فصول الأعمال
 #                        **المرتبطة** (أساس بوابة «الفصل المنشور فقط»).
@@ -31,6 +33,7 @@ DEFAULT_STATE = {
     "sync_interval_minutes": 10,
     "announce_channel_id": None,
     "baseline_done": False,
+    "sync_version": 0,
     "listing_v2": False,
     "last_sync_at": None,
     "last_sync_ok": None,
@@ -90,8 +93,9 @@ async def load_cache() -> dict:
         raise DatabaseUnavailableError(f"تعذر قراءة كاش أزورا: {e}") from e
     if doc and isinstance(doc.get("works"), dict):
         return {"works": doc["works"],
-                "seen_chapter_ids": doc.get("seen_chapter_ids", []) or []}
-    return {"works": {}, "seen_chapter_ids": []}
+                "seen_chapter_ids": doc.get("seen_chapter_ids", []) or [],
+                "top_numbers": doc.get("top_numbers", {}) or {}}
+    return {"works": {}, "seen_chapter_ids": [], "top_numbers": {}}
 
 
 async def save_cache(cache: dict) -> bool:
@@ -99,7 +103,8 @@ async def save_cache(cache: dict) -> bool:
         await azora_collection.update_one(
             {"_id": "cache"},
             {"$set": {"works": cache.get("works", {}),
-                      "seen_chapter_ids": cache.get("seen_chapter_ids", []) or []}},
+                      "seen_chapter_ids": cache.get("seen_chapter_ids", []) or [],
+                      "top_numbers": cache.get("top_numbers", {}) or {}}},
             upsert=True)
         return True
     except Exception as e:
