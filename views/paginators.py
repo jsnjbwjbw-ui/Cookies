@@ -201,10 +201,9 @@ class WorkMembersView(DynamicCardView):
 
     async def select_callback(self, interaction: discord.Interaction):
         user_id = int(interaction.data['values'][0])
-        records = await load_records()
-        isolated = get_isolated_work_names(await load_works())
+        records = await load_visible_records(get_active_month_key())
         user_entries = records.get(str(user_id), [])
-        work_entries = [e for e in user_entries if e.get("work_name") == self.work_name and e.get("work_name") not in isolated]
+        work_entries = [e for e in user_entries if e.get("work_name") == self.work_name]
         if not work_entries:
             member_obj = _guild_member(self.guild, user_id)
             await interaction.response.send_message(

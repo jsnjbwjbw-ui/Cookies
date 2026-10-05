@@ -110,22 +110,35 @@ class DeletePanel(SafeLayoutView):
                 "أُلغيت العملية", ["لم يُحذف أي شيء."], avatar_url=_bot_avatar(interaction.client)))
             return
 
+        active_key = get_active_month_key()
+        active_name = await get_month_name(active_key)
+
         if value == "delete_all_user":
             async def confirm(interaction2: discord.Interaction):
                 records = await load_records()
-                if str(self.member.id) in records:
-                    del records[str(self.member.id)]
-                    await save_records(records)
-                    await log_audit("حذف_كل_سجلات_العضو", interaction.user.id, self.member.id, "حذف كل السجلات")
-                    await update_stats()
-                    await finish_card(interaction2, "تم حذف كل سجلات العضو",
-                                      [f"**العضو:** {self.member.mention}", "لم يتبقَّ أي سجل له."])
-                else:
+                uid = str(self.member.id)
+                entries = records.get(uid, [])
+                month_entries = entries_in_month(entries, active_key)
+                if not month_entries:
                     await finish_card(interaction2, "لا توجد سجلات",
-                                      [f"لا توجد سجلات للعضو {self.member.mention}."], green=False)
+                                      [f"لا توجد سجلات للعضو {self.member.mention} في **{active_name}**."], green=False)
+                    return
+                kept = [e for e in entries if not entry_in_month(e, active_key)]
+                if kept:
+                    records[uid] = kept
+                else:
+                    del records[uid]
+                await save_records(records)
+                await log_audit("حذف_كل_سجلات_العضو", interaction.user.id, self.member.id,
+                                f"حذف {len(month_entries)} سجل من شهر {active_key}")
+                await update_stats()
+                await finish_card(interaction2, f"تم حذف سجلات {active_name}",
+                                  [f"**العضو:** {self.member.mention}",
+                                   f"حُذف **{len(month_entries)}** سجل من **{active_name}** — شهور أخرى محفوظة."])
             await send_confirm_card(
                 interaction, "تأكيد حذف السجلات",
-                f"هل أنت متأكد من حذف **كل** سجلات {self.member.mention}؟ لا يمكن التراجع.",
+                f"سيُحذف شغل {self.member.mention} في **{active_name} فقط**.\n"
+                "سجلات الشهور الأخرى **محفوظة**. لا يمكن التراجع.",
                 confirm)
             return
 
@@ -133,40 +146,45 @@ class DeletePanel(SafeLayoutView):
             async def confirm(interaction2: discord.Interaction):
                 records = await load_records()
                 user_id_str = str(self.member.id)
-                if user_id_str in records:
-                    new_entries = [e for e in records[user_id_str] if e.get("work_name") != self.work_name]
-                    removed_count = len(records[user_id_str]) - len(new_entries)
-                    records[user_id_str] = new_entries
-                    if not records[user_id_str]:
-                        del records[user_id_str]
-                    await save_records(records)
-                    await log_audit("حذف_عمل_كامل", interaction.user.id, self.member.id,
-                                    f"حذف عمل {self.work_name} ({removed_count} فصل)")
-                    await update_stats()
-                    await finish_card(interaction2, "تم حذف العمل",
-                                      [f"حُذف عمل «{self.work_name}» بالكامل — **{removed_count}** فصل.",
-                                       f"**العضو:** {self.member.mention}"])
-                else:
+                entries = records.get(user_id_str, [])
+                new_entries = [e for e in entries
+                               if not (e.get("work_name") == self.work_name and entry_in_month(e, active_key))]
+                removed_count = len(entries) - len(new_entries)
+                if removed_count == 0:
                     await finish_card(interaction2, "لا توجد سجلات",
-                                      [f"لا توجد سجلات للعضو {self.member.mention}."], green=False)
+                                      [f"لا توجد سجلات لعمل «{self.work_name}» في **{active_name}**."], green=False)
+                    return
+                if new_entries:
+                    records[user_id_str] = new_entries
+                else:
+                    del records[user_id_str]
+                await save_records(records)
+                await log_audit("حذف_عمل_كامل", interaction.user.id, self.member.id,
+                                f"حذف عمل {self.work_name} من شهر {active_key} ({removed_count} فصل)")
+                await update_stats()
+                await finish_card(interaction2, "تم حذف العمل",
+                                  [f"حُذف عمل «{self.work_name}» من **{active_name}** — **{removed_count}** فصل.",
+                                   f"**العضو:** {self.member.mention}"])
             await send_confirm_card(
                 interaction, "تأكيد حذف العمل",
-                f"هل أنت متأكد من حذف كل فصول عمل «{self.work_name}» للعضو {self.member.mention}؟",
+                f"سيُحذف شغل عمل «{self.work_name}» لـ {self.member.mention} في **{active_name} فقط**.\n"
+                "سجلات الشهور الأخرى **محفوظة**.",
                 confirm)
             return
 
         if value == "delete_chapter":
             records = await load_records()
             user_id_str = str(self.member.id)
-            if user_id_str not in records:
+            month_entries = entries_in_month(records.get(user_id_str, []), active_key)
+            if not month_entries:
                 await interaction.response.send_message(
-                    view=cards.error_card("لا توجد سجلات", [f"لا توجد سجلات للعضو {self.member.mention}."]),
+                    view=cards.error_card("لا توجد سجلات", [f"لا توجد سجلات للعضو {self.member.mention} في **{active_name}**."]),
                     ephemeral=True)
                 return
-            work_entries = [e for e in records[user_id_str] if e.get("work_name") == self.work_name]
+            work_entries = [e for e in month_entries if e.get("work_name") == self.work_name]
             if not work_entries:
                 await interaction.response.send_message(
-                    view=cards.error_card("لا توجد فصول", ["لا توجد فصول لهذا العمل."]),
+                    view=cards.error_card("لا توجد فصول", [f"لا توجد فصول لهذا العمل في **{active_name}**."]),
                     ephemeral=True)
                 return
             options = []
@@ -210,29 +228,37 @@ class ChapterDeletePanel(SafeLayoutView):
                 "أُلغيت العملية", ["لم يُحذف أي شيء."], avatar_url=_bot_avatar(interaction.client)))
             return
 
+        active_key = get_active_month_key()
+        active_name = await get_month_name(active_key)
+
         async def confirm(interaction2: discord.Interaction):
             records2 = await load_records()
             user_id_str = str(self.member.id)
-            if user_id_str in records2:
-                new_entries = [e for e in records2[user_id_str]
-                               if not (e.get("work_name") == self.work_name and str(e.get("chapter")) == chapter)]
-                removed = len(records2[user_id_str]) - len(new_entries)
-                records2[user_id_str] = new_entries
-                if not records2[user_id_str]:
-                    del records2[user_id_str]
-                await save_records(records2)
-                await log_audit("حذف_فصل", interaction.user.id, self.member.id,
-                                f"حذف فصل {chapter} من عمل {self.work_name}")
-                await update_stats()
-                await finish_card(interaction2, "تم حذف الفصل",
-                                  [f"حُذف **فصل {chapter}** من عمل «{self.work_name}».",
-                                   f"**العضو:** {self.member.mention}"])
-            else:
+            entries = records2.get(user_id_str, [])
+            new_entries = [e for e in entries
+                           if not (e.get("work_name") == self.work_name
+                                   and str(e.get("chapter")) == chapter
+                                   and entry_in_month(e, active_key))]
+            removed = len(entries) - len(new_entries)
+            if removed == 0:
                 await finish_card(interaction2, "لا توجد سجلات",
-                                  [f"لا توجد سجلات للعضو {self.member.mention}."], green=False)
+                                  [f"لا توجد سجلات للفصل {chapter} في **{active_name}*."], green=False)
+                return
+            if new_entries:
+                records2[user_id_str] = new_entries
+            else:
+                del records2[user_id_str]
+            await save_records(records2)
+            await log_audit("حذف_فصل", interaction.user.id, self.member.id,
+                            f"حذف فصل {chapter} من عمل {self.work_name} (شهر {active_key})")
+            await update_stats()
+            await finish_card(interaction2, "تم حذف الفصل",
+                              [f"حُذف **فصل {chapter}** من عمل «{self.work_name}» في **{active_name}**.",
+                               f"**العضو:** {self.member.mention}"])
         await send_confirm_card(
             interaction, "تأكيد حذف الفصل",
-            f"هل أنت متأكد من حذف **فصل {chapter}** من عمل «{self.work_name}»؟",
+            f"سيُحذف **فصل {chapter}** من عمل «{self.work_name}» في **{active_name} فقط**.\n"
+            "سجلات الشهور الأخرى **محفوظة**.",
             confirm)
 
 
@@ -252,20 +278,23 @@ async def delete_advanced(interaction: discord.Interaction, member: discord.Memb
         return
     records = await load_records()
     user_id_str = str(member.id)
-    if user_id_str not in records or not records[user_id_str]:
+    active_key = get_active_month_key()
+    active_name = await get_month_name(active_key)
+    month_entries = entries_in_month(records.get(user_id_str, []), active_key)
+    if not month_entries:
         await interaction.response.send_message(view=cards.error_card(
-            "لا توجد سجلات", [f"العضو {member.mention} ما عنده أي شغل محفوظ."],
+            "لا توجد سجلات", [f"العضو {member.mention} ما عنده أي شغل محفوظ في **{active_name}**."],
             avatar_url=_member_avatar(member)), ephemeral=True)
         return
     if work_name:
-        work_exists = any(e.get("work_name") == work_name for e in records[user_id_str])
+        work_exists = any(e.get("work_name") == work_name for e in month_entries)
         if not work_exists:
             await interaction.response.send_message(view=cards.error_card(
-                "العمل غير موجود", [f"لا يوجد عمل باسم `{work_name}` لهذا العضو."]), ephemeral=True)
+                "العمل غير موجود", [f"لا يوجد عمل باسم `{work_name}` لهذا العضو في **{active_name}**."]), ephemeral=True)
             return
         await interaction.response.send_message(view=DeletePanel(interaction.user, member, work_name))
     else:
-        works = sorted({e.get("work_name") for e in records[user_id_str]})
+        works = sorted({e.get("work_name") for e in month_entries})
         options = [discord.SelectOption(label=f"📖 {cards.clamp(w, 90)}", value=w) for w in works[:24]]
         options.append(discord.SelectOption(label="👤 حذف كل سجلات العضو", value="delete_all_user"))
         options.append(discord.SelectOption(label="❌ إلغاء", value="cancel"))
@@ -305,21 +334,34 @@ class WorkPickPanel(SafeLayoutView):
                 "أُلغيت العملية", ["لم يُحذف أي شيء."], avatar_url=_bot_avatar(interaction.client)))
             return
         if value == "delete_all_user":
+            active_key = get_active_month_key()
+            active_name = await get_month_name(active_key)
+
             async def confirm(interaction2: discord.Interaction):
                 records2 = await load_records()
-                if str(self.member.id) in records2:
-                    del records2[str(self.member.id)]
-                    await save_records(records2)
-                    await log_audit("حذف_كل_سجلات_العضو", interaction.user.id, self.member.id, "حذف كل السجلات")
-                    await update_stats()
-                    await finish_card(interaction2, "تم حذف كل سجلات العضو",
-                                      [f"**العضو:** {self.member.mention}", "لم يتبقَّ أي سجل له."])
-                else:
+                uid = str(self.member.id)
+                entries = records2.get(uid, [])
+                month_entries = entries_in_month(entries, active_key)
+                if not month_entries:
                     await finish_card(interaction2, "لا توجد سجلات",
-                                      [f"لا توجد سجلات للعضو {self.member.mention}."], green=False)
+                                      [f"لا توجد سجلات للعضو {self.member.mention} في **{active_name}**."], green=False)
+                    return
+                kept = [e for e in entries if not entry_in_month(e, active_key)]
+                if kept:
+                    records2[uid] = kept
+                else:
+                    del records2[uid]
+                await save_records(records2)
+                await log_audit("حذف_كل_سجلات_العضو", interaction.user.id, self.member.id,
+                                f"حذف {len(month_entries)} سجل من شهر {active_key}")
+                await update_stats()
+                await finish_card(interaction2, f"تم حذف سجلات {active_name}",
+                                  [f"**العضو:** {self.member.mention}",
+                                   f"حُذف **{len(month_entries)}** سجل من **{active_name}** — شهور أخرى محفوظة."])
             await send_confirm_card(
                 interaction, "تأكيد حذف السجلات",
-                f"هل أنت متأكد من حذف **كل** سجلات {self.member.mention}؟ لا يمكن التراجع.",
+                f"سيُحذف شغل {self.member.mention} في **{active_name} فقط**.\n"
+                "سجلات الشهور الأخرى **محفوظة**. لا يمكن التراجع.",
                 confirm)
             return
         work = value
@@ -335,17 +377,24 @@ async def delete_work_text(ctx, member: discord.Member = None, number: int = Non
         return
     records = await load_records()
     user_id = str(member.id)
-    if user_id not in records or not records[user_id]:
-        await ctx.send("هذا العضو ما عنده أي شغل محفوظ.")
+    active_key = get_active_month_key()
+    active_name = await get_month_name(active_key)
+    month_entries = entries_in_month(records.get(user_id, []), active_key)
+    if not month_entries:
+        await ctx.send(f"هذا العضو ما عنده أي شغل محفوظ في **{active_name}**.")
         return
-    if number < 1 or number > len(records[user_id]):
+    if number < 1 or number > len(month_entries):
         await ctx.send("رقم السجل غير صحيح.")
         return
-    deleted = records[user_id].pop(number - 1)
+    deleted = month_entries[number - 1]
+    for i, e in enumerate(records[user_id]):
+        if e is deleted:
+            del records[user_id][i]
+            break
     if not records[user_id]:
         del records[user_id]
     await save_records(records)
-    await log_audit("حذف سجل (نصي)", ctx.author.id, member.id, f"السجل #{number}: {deleted.get('work_name')} - فصل {deleted.get('chapter')}")
+    await log_audit("حذف سجل (نصي)", ctx.author.id, member.id, f"السجل #{number} (شهر {active_key}): {deleted.get('work_name')} - فصل {deleted.get('chapter')}")
     await update_stats()
     avatar = ctx.bot.user.display_avatar.url if ctx.bot.user else None
     currency = SETTINGS.get('currency', '$') or '$'

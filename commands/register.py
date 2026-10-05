@@ -273,7 +273,8 @@ async def register_slash(interaction: discord.Interaction, العمل: str, ال
         if channel:
             await channel.send(f"{interaction.user.mention} أضاف {added} فصول مدفوعة في عمل `{العمل}`")
 
-    total_user_amount = sum(item.get("total", 0) for item in records[user_id])
+    total_user_amount = sum(item.get("total", 0)
+                            for item in entries_in_month(records[user_id], month_key))
     threshold = SETTINGS.get("alert_threshold", 10.0)
     if total_user_amount >= threshold:
         try:

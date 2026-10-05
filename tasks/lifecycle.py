@@ -270,7 +270,8 @@ async def payment_reminder_task():
 
 
 async def check_payment_reminder():
-    """Check if it's time to send payment reminders."""
+    """حالة تذكير الدفع **لكل شهر على حدة** — تبديل الشهر يبدأ دورة دفع
+    جديدة نظيفة، وشهور سابقة لا تعيد إطلاق تذكيراتها ولا تمنع شهرًا جديدًا."""
     payment_day = SETTINGS.get("payment_day")
     if not payment_day:
         return
@@ -282,21 +283,34 @@ async def check_payment_reminder():
     if payment_day > 28:
         payment_date = today.replace(day=28)  # safe fallback
 
+    active_key = get_active_month_key()
+    sent_all = SETTINGS.get("payment_sent")
+    legacy_flags = None
+    if not isinstance(sent_all, dict):
+        # ترحيل لمرة واحدة: الأعلام العالمية القديمة → حالة الشهر النشط
+        # (يمنع تكرار تذكير أُرسل قبل التحديث في نفس دورة الدفع)
+        legacy_flags = {
+            "reminder_24h_sent": bool(SETTINGS.get("payment_reminder_24h_sent")),
+            "day_sent": bool(SETTINGS.get("payment_day_sent")),
+        }
+        sent_all = {}
+        SETTINGS["payment_sent"] = sent_all
+    flags = sent_all.get(active_key)
+    if not isinstance(flags, dict):
+        flags = legacy_flags or {}
+        sent_all[active_key] = flags
+        await save_settings(SETTINGS)
+
     # 24 hours before reminder
     reminder_date = payment_date - timedelta(days=1)
-    if now.date() == reminder_date and now.hour >= payment_hour and not SETTINGS.get("payment_reminder_24h_sent"):
+    if now.date() == reminder_date and now.hour >= payment_hour and not flags.get("reminder_24h_sent"):
         await send_payment_reminder(24)
-        SETTINGS["payment_reminder_24h_sent"] = True
+        flags["reminder_24h_sent"] = True
         await save_settings(SETTINGS)
     # Payment day reminder
-    elif now.date() == payment_date and now.hour >= payment_hour and not SETTINGS.get("payment_day_sent"):
+    elif now.date() == payment_date and now.hour >= payment_hour and not flags.get("day_sent"):
         await send_payment_reminder(0)
-        SETTINGS["payment_day_sent"] = True
-        await save_settings(SETTINGS)
-    # Reset flags when day passes
-    elif now.date() > payment_date:
-        SETTINGS["payment_reminder_24h_sent"] = False
-        SETTINGS["payment_day_sent"] = False
+        flags["day_sent"] = True
         await save_settings(SETTINGS)
 
 

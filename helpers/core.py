@@ -96,6 +96,14 @@ def entry_in_month(entry: dict, month_key: str) -> bool:
     return month_key_of(entry) == month_key
 
 
+def entries_in_month(entries: list, month_key: str | None = None) -> list:
+    """سجلات شهر واحد فقط (الافتراضي: الشهر النشط) — أساس الفصل التام بين الشهور:
+    كل قراءة/حذف/مقارنة تكرار تعمل داخل الشهر النشط ولا تلمس أرشيف الشهور الأخرى."""
+    if month_key is None:
+        month_key = get_active_month_key()
+    return [e for e in entries if entry_in_month(e, month_key)]
+
+
 async def get_month_doc(month_key: str) -> dict | None:
     try:
         return await months_collection.find_one({"_id": month_key})
@@ -738,9 +746,11 @@ def parse_mixed_types(types_input, chapters_count):
 def map_type(t):
     return t.strip().replace(' ', '_')
 
-def is_duplicate(records, user_id, work_name, chapter, work_type):
+def is_duplicate(records, user_id, work_name, chapter, work_type, month_key=None):
+    """تكرار فصل+تخصص **داخل الشهر الواحد فقط** — سجلات الشهور الأخرى
+    لا تمنع تسجيلًا جديدًا في الشهر النشط (فصل تام بين الشهور)."""
     user_entries = records.get(str(user_id), [])
-    for e in user_entries:
+    for e in entries_in_month(user_entries, month_key):
         if (e.get("work_name") == work_name and 
             e.get("chapter") == chapter and 
             e.get("work_type") == work_type):

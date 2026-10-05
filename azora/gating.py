@@ -62,8 +62,11 @@ async def unpublished_chapters(work: dict, chapters: list[str]) -> list[str]:
 
 def duplicate_conflicts(records: dict, requester_id, work_name: str,
                         chapters: list[str], types: list[str]) -> list[str]:
-    """أسطر تعارض «فصل+تخصص» سجّلهم أعضاء آخرون سابقًا.
+    """أسطر تعارض «فصل+تخصص» سجّلهم أعضاء آخرون سابقًا **داخل الشهر النشط فقط** —
+    سجلات الشهور الأخرى أرشيف لا يمنع تسجيلًا جديدًا.
     يُستثنى صاحب الطلب نفسه حتى يعيد المحاولة لنفسه بلا حظر زائف."""
+    from helpers.core import get_active_month_key, entry_in_month
+    active_key = get_active_month_key()
     out: list[str] = []
     requester_key = str(requester_id)
     for ch, t in zip(chapters, types):
@@ -71,6 +74,8 @@ def duplicate_conflicts(records: dict, requester_id, work_name: str,
             if user_id == requester_key:
                 continue
             for e in entries:
+                if not entry_in_month(e, active_key):
+                    continue
                 if (e.get("work_name") == work_name
                         and normalize_chapter(e.get("chapter", "")) == normalize_chapter(ch)
                         and str(e.get("work_type", "")) == str(t)):

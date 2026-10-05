@@ -1391,12 +1391,13 @@ async def edit_last(interaction: discord.Interaction,
     avatar = _member_avatar(interaction.user)
     records = await load_records()
     user_id = str(interaction.user.id)
-    if user_id not in records or not records[user_id]:
+    month_entries = entries_in_month(records.get(user_id, []))
+    if not month_entries:
         await interaction.response.send_message(view=cards.info_card(
-            "لا توجد سجلات", ["لا يوجد سجلات."], avatar_url=avatar), ephemeral=True)
+            "لا توجد سجلات", ["لا يوجد سجلات في الشهر النشط."], avatar_url=avatar), ephemeral=True)
         return
 
-    last = records[user_id][-1]
+    last = month_entries[-1]
     changed = []
     if العمل:
         last["work_name"] = العمل

@@ -813,18 +813,19 @@ async def delete_bonus_deduction(interaction: discord.Interaction, عضو: disco
         return
     records = await load_records()
     user_id = str(عضو.id)
+    active_key = get_active_month_key()
     if user_id not in records:
         await interaction.response.send_message(view=cards.error_card(
             "لا توجد سجلات", [f"لا يوجد سجلات للعضو {عضو.mention}."], avatar_url=avatar), ephemeral=True)
         return
 
-    all_entries = records[user_id]
+    all_entries = [e for e in records[user_id] if entry_in_month(e, active_key)]
     bonus_ded_entries = [e for e in all_entries if e.get("work_type") in ("مكافأة", "خصم")]
     bonus_ded_entries.reverse()  # newest first
     recent = bonus_ded_entries[:10]
     if not recent:
         await interaction.response.send_message(view=cards.error_card(
-            "لا توجد عمليات", [f"لا يوجد عمليات مكافأة أو خصم للعضو {عضو.mention}."], avatar_url=avatar), ephemeral=True)
+            "لا توجد عمليات", [f"لا يوجد عمليات مكافأة أو خصم للعضو {عضو.mention} في الشهر النشط."], avatar_url=avatar), ephemeral=True)
         return
 
     options = []

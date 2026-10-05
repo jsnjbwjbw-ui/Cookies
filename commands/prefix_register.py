@@ -16,6 +16,7 @@ from helpers.core import (
     get_work, is_work_isolated, filter_paid_chapters,
     parse_chapter_range, is_duplicate, get_specialty_price,
     update_stats, upsert_member, get_active_month_key,
+    entries_in_month,
 )
 from azora.gating import registration_blockers, get_azora_link, unpublished_chapters, normalize_chapter
 from ui import cards
@@ -296,7 +297,7 @@ class WizardSession:
                     pass
         threshold = SETTINGS.get("alert_threshold", 10.0)
         currency = SETTINGS.get('currency', '$') or '$'
-        total_user = sum(e.get("total", 0) for e in records[user_id])
+        total_user = sum(e.get("total", 0) for e in entries_in_month(records[user_id], month_key))
         if total_user >= threshold:
             try:
                 await self.member.send(f"تنبيه: إجمالي شغلك وصل إلى {currency}{total_user:.2f}.")
